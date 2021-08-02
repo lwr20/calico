@@ -65,7 +65,7 @@ _includes/charts/%/values.yaml: _plugins/values.rb _plugins/helm.rb _data/versio
 # Note that helm requires strict semantic versioning, so we use v0.0 to represent 'master'.
 ifdef RELEASE_CHART
 # the presence of RELEASE_CHART indicates we're trying to cut an official chart release.
-chartVersion:=$(CALICO_VER)
+chartVersion:=$(CALICO_VER)-$(CHART_RELEASE)
 appVersion:=$(CALICO_VER)
 else
 # otherwise, it's a nightly build.
@@ -146,13 +146,13 @@ dev-image: $(addsuffix -dev-image, $(filter-out calico felix, $(RELEASE_REPOS)))
 # Dynamically declare new make targets for all calico subprojects...
 $(addsuffix -dev-image,$(RELEASE_REPOS)): %-dev-image: ../%
 	echo "TARGET:"
-	echo $< 
+	echo $<
 	@cd $< && export TAG=$$($(TAG_COMMAND)); make image retag-build-images-with-registries \
 		ARCHES=amd64 \
 		BUILD_IMAGE=$(REGISTRY)/$* \
 		PUSH_IMAGES=$(REGISTRY)/$* \
 		LOCAL_BUILD=$(LOCAL_BUILD) \
-		IMAGETAG=$$TAG 
+		IMAGETAG=$$TAG
 
 ## Push locally built images.
 dev-push: $(addsuffix -dev-push, $(filter-out calico felix, $(RELEASE_REPOS)))
@@ -388,7 +388,9 @@ helm-index: release-prereqs
 	cp $(RELEASE_HELM_CHART) charts/$(CALICO_VER)/
 	wget https://calico-public.s3.amazonaws.com/charts/index.yaml -O charts/index.yaml.bak
 	cd charts/ && helm repo index . --merge index.yaml.bak --url https://github.com/projectcalico/calico/releases/download/
-	aws --profile helm s3 cp index.yaml s3://calico-public/charts/ --acl public-read
+    # This sed is needed because we don't really use the CHART_RELEASE.
+	sed -i 's/version: $(CALICO_VER)-$(CHART_RELEASE)/version: $(CALICO_VER)/g' charts/index.yaml
+	aws --profile helm s3 cp charts/index.yaml s3://calico-public/charts/ --acl public-read
 	rm -rf charts
 
 ## Generates release notes for the given version.
