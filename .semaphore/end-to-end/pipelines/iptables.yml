@@ -606,7 +606,7 @@ blocks:
             - ~/calico/.semaphore/end-to-end/scripts/body_standard.sh
           env_vars:
             - name: CNI_PLUGIN
-              value: aws
+              value: AmazonVPC
 
         - name: kdd (Calico CNI)
           execution_time_limit:
@@ -615,7 +615,7 @@ blocks:
             - ~/calico/.semaphore/end-to-end/scripts/body_standard.sh
           env_vars:
             - name: CNI_PLUGIN
-              value: calico
+              value: Calico
             # Skipping these upstream k8s tests since they are failing because of limitations of Calico CNI on EKS:
             # - [IT] "Proxy version v1 A set of valid responses are returned for both pod and service Proxy"
             # - [IT] "Proxy version v1 should proxy through a service and a pod"
@@ -715,40 +715,6 @@ blocks:
       env_vars:
         - name: PROVISIONER
           value: gcp-kubeadm
-
-  - name: "Migration"
-    dependencies: []
-    task:
-      agent:
-        machine:
-          type: f1-standard-2
-          os_image: ubuntu2204
-      jobs:
-        - name: "Flannel migration"
-          execution_time_limit:
-            hours: 7
-          commands:
-            - ./scripts/body_flannel-migration.sh
-          matrix:
-            - env_var: DOWNLEVEL_MANIFEST
-              values:
-                - "https://raw.githubusercontent.com/projectcalico/calico/v3.28.2/manifests/canal.yaml"
-                - "https://raw.githubusercontent.com/coreos/flannel/master/Documentation/kube-flannel.yml"
-          env_vars:
-            - name: K8S_VERSION
-              value: "stable-1"
-            - name: PROVISIONER
-              value: "local-kind"
-            - name: MIGRATION_MANIFEST
-              value: "manifests/flannel-migration/migration-job.yaml"
-            - name: CALICO_MANIFEST
-              value: "manifests/flannel-migration/calico.yaml"
-            - name: INSTALLER
-              value: "manual"
-            - name: K8S_E2E_FLAGS
-              value: --ginkgo.focus=(\[sig-calico\]|\[Conformance\]) --ginkgo.skip=(\[Slow\]|\[Disruptive\]|\[DataPath\]|WireGuard)
-            - name: USE_HASH_RELEASE
-              value: "true"
 
 promotions:
   - name: Cleanup jobs
