@@ -55,7 +55,7 @@ global_job_config:
     - name: PRIVATE_REGISTRY
       value: "quay.io/"
     - name: RELEASE_STREAM
-      value: "master"
+      value: "v3.31"
     - name: VPP_VERSION
       value: "master"
 
