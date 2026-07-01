@@ -1,0 +1,38 @@
+# SMOKE TEST — one cheap gcp-kubeadm nftables job, to validate the ArgoCI
+# plumbing (checkout, secrets, bz provision/install/test, scripts, reporting)
+# on a real run before the full 9-step fan-out. NOT a faithful pipeline run.
+#
+# Place at .argoci/cron/e2e-nftables-smoke.yaml on an onboarded branch, let the
+# handler apply it, then run it on demand (the Feb-31 schedule never fires):
+#   argo submit --from cronwf/e2e-nftables-smoke -n <argoci-ns>
+version: condensed
+generateName: e2e-nftables-smoke-
+schedule: "0 0 31 2 *"   # Feb 31 = never; submit manually
+globalPrologue: |
+    export DATAPLANE="${DATAPLANE:-CalicoNftables}"
+    export KUBE_PROXY_MODE="${KUBE_PROXY_MODE:-nftables}"
+    export INSTALLER="${INSTALLER:-operator}"
+    export USE_PRIVATE_REGISTRY="${USE_PRIVATE_REGISTRY:-true}"
+    export ENABLE_AUTOHEP="${ENABLE_AUTOHEP:-true}"
+    export PRIVATE_REGISTRY="${PRIVATE_REGISTRY:-quay.io/}"
+    export FUNCTIONAL_AREA="${FUNCTIONAL_AREA:-nftables.yml}"
+    export K8S_E2E_FLAGS="${K8S_E2E_FLAGS:---ginkgo.focus=(\[sig-calico\]|\[Conformance\]) --ginkgo.skip=(\[Slow\]|\[Disruptive\]|sig-node|sig-apps|sig-storage|sig-scheduling|sig-calico-enterprise|\[DataPath\]|WireGuard)}"
+    # To make the smoke FAST, narrow the focus to a single quick test, e.g.:
+    #   export K8S_E2E_FLAGS="--ginkgo.focus=should.function.for.intra-pod.communication:.http"
+    source .argoci/scripts/global_prologue.sh
+globalEpilogue: |
+    source .argoci/scripts/global_epilogue.sh
+defaults:
+    secretBundles:
+        - banzai-secrets
+steps:
+    - name: smoke-gcp-kubeadm
+      services:
+        - docker
+      env:
+        - name: PROVISIONER
+          value: gcp-kubeadm
+        - name: K8S_VERSION
+          value: stable
+      commands: |
+        .argoci/scripts/body_standard.sh
