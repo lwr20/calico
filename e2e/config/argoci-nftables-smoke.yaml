@@ -1,0 +1,13 @@
+# argoci-nftables-smoke.yaml - minimal fast smoke selection for validating the
+# ArgoCI nftables e2e pipeline end-to-end. Runs only the Feature:BGPPeer specs
+# (BGP/BIRD is on by default in the operator install), exercising real Calico
+# networking without the full conformance suite's ~90-min runtime/timeout.
+include:
+  - Feature:BGPPeer
+
+exclude:
+  labels:
+    - label: Slow
+      reason: "long-running tests not suitable for CI"
+    - label: Disruptive
+      reason: "breaks cluster state for other parallel tests"
