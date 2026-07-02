@@ -54,6 +54,9 @@ export DIAGS_ARCHIVE_FILENAME=${DIAGS_ARCHIVE_FILENAME:-${PROVISIONER}-${CLUSTER
 
 # bz working directories and artifact bucket.
 export BZ_HOME=${BZ_HOME:-${HOME}/bz}
+export BZ_PROFILES_PATH="${BZ_PROFILES_PATH:-${BZ_HOME}}"
+export USE_HASH_RELEASE="${USE_HASH_RELEASE:-true}"
+export USE_LATEST_RELEASE="${USE_LATEST_RELEASE:-false}"
 export BZ_LOCAL_DIR=${BZ_LOCAL_DIR:-${BZ_HOME}/.local}
 export BZ_LOGS_DIR=${BZ_LOGS_DIR:-${HOME}/.bz/logs}
 export REPORT_DIR=${REPORT_DIR:-${BZ_LOCAL_DIR}/report/${TEST_TYPE}}
