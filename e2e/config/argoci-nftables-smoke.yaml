@@ -11,3 +11,5 @@ exclude:
       reason: "long-running tests not suitable for CI"
     - label: Disruptive
       reason: "breaks cluster state for other parallel tests"
+    - label: RequiresBGPMesh
+      reason: "default operator install has no node-to-node BGP mesh; those specs fail in BeforeEach"
