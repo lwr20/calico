@@ -7,7 +7,7 @@
 #   argo submit --from cronwf/e2e-nftables-smoke -n <argoci-ns>
 version: condensed
 generateName: e2e-nftables-smoke-
-schedule: "35 09 * * *"   # ARMED one-shot
+schedule: "46 09 * * *"   # ARMED one-shot
 globalPrologue: |
     cd "${CI_HOME}/${CI_GIT_DIR}"   # checkout lands here; make our relative script paths resolve
     export DATAPLANE="${DATAPLANE:-CalicoNftables}"
@@ -22,7 +22,7 @@ globalPrologue: |
     #   export K8S_E2E_FLAGS="--ginkgo.focus=should.function.for.intra-pod.communication:.http"
     source .argoci/scripts/global_prologue.sh
 globalEpilogue: |
-    source .argoci/scripts/global_epilogue.sh
+    source "${CI_HOME}/${CI_GIT_DIR}/.argoci/scripts/global_epilogue.sh"
 defaults:
     secretBundles:
         - banzai-secrets
