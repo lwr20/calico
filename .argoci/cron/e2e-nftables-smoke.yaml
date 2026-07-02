@@ -7,7 +7,7 @@
 #   argo submit --from cronwf/e2e-nftables-smoke -n <argoci-ns>
 version: condensed
 generateName: e2e-nftables-smoke-
-schedule: "46 09 * * *"   # ARMED one-shot
+schedule: "57 09 * * *"   # ARMED one-shot
 globalPrologue: |
     cd "${CI_HOME}/${CI_GIT_DIR}"   # checkout lands here; make our relative script paths resolve
     export DATAPLANE="${DATAPLANE:-CalicoNftables}"
