@@ -97,6 +97,14 @@ echo "[INFO] bz resolved at $(command -v bz || echo '<none>')"
 echo "[INFO] initialising bz profile..."
 ( cd "${HOME}" && bz init profile -n "${BZ_PROFILE_NAME}" --skip-prompt --secretsPath "${HOME}/secrets" ) \
   |& tee "${BZ_LOGS_DIR}/initialize.log" || true
-mkdir -p "${BZ_LOCAL_DIR}" "${REPORT_DIR}"
+mkdir -p "${BZ_LOCAL_DIR}" "${REPORT_DIR}" "${BZ_LOCAL_DIR}/config"
+# bz provision prereq wants the docker auth at <profile>/.local/config/docker_auth.json
+# (the DOCKER_AUTH_FILE env alone does not redirect the prereq check).
+if [[ -f "${HOME}/.docker/config.json" ]]; then
+  cp "${HOME}/.docker/config.json" "${BZ_LOCAL_DIR}/config/docker_auth.json"
+  echo "[INFO] staged docker_auth.json into ${BZ_LOCAL_DIR}/config"
+else
+  echo "[WARN] ${HOME}/.docker/config.json missing; docker_auth not staged"
+fi
 
 echo "[INFO] exiting prologue (PROVISIONER=${PROVISIONER} RELEASE_STREAM=${RELEASE_STREAM} CLUSTER_NAME=${CLUSTER_NAME})"
