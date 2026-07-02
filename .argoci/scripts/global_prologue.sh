@@ -60,6 +60,24 @@ export REPORT_DIR=${REPORT_DIR:-${BZ_LOCAL_DIR}/report/${TEST_TYPE}}
 export GS_BUCKET=${GS_BUCKET:-argoci-artifacts}
 mkdir -p "${BZ_HOME}" "${BZ_LOCAL_DIR}" "${BZ_LOGS_DIR}" "${REPORT_DIR}"
 
+# --- Install the banzai (bz) CLI: the ArgoCI runner image does not ship it ---
+# (Semaphore installed bz the same way; our earlier port wrongly assumed the
+#  base image provided it.) BZ_REPO + GITHUB_ACCESS_TOKEN come from banzai-secrets.
+export BZ_GLOBAL_BIN="${BZ_GLOBAL_BIN:-${HOME}/.local/bin}"
+mkdir -p "${BZ_GLOBAL_BIN}"
+export PATH="${BZ_GLOBAL_BIN}:${PATH}"
+if ! command -v bz >/dev/null 2>&1; then
+  echo "[INFO] bz not on PATH; BZ_REPO=${BZ_REPO:-<UNSET>} GITHUB_ACCESS_TOKEN=$( [ -n "${GITHUB_ACCESS_TOKEN:-}" ] && echo SET || echo EMPTY ) jq=$(command -v jq || echo none) wget=$(command -v wget || echo none)"
+  : "${BZ_REPO:?BZ_REPO not set (expected from banzai-secrets)}"
+  : "${GITHUB_ACCESS_TOKEN:?GITHUB_ACCESS_TOKEN not set (expected from banzai-secrets)}"
+  [[ -n "${BZ_VERSION:-}" ]] && BZ_RELEASE="tags/${BZ_VERSION}" || BZ_RELEASE="latest"
+  BZ_ASSET_ID=$(curl --retry 9 --retry-all-errors -H "Authorization: token ${GITHUB_ACCESS_TOKEN}" -H "Accept: application/vnd.github.v3.raw" -s "https://api.github.com/repos/${BZ_REPO}/releases/${BZ_RELEASE}" | jq '.assets[] | select(.name|test("^bz.*linux-amd64"))| .id')
+  echo "[INFO] bz asset id=${BZ_ASSET_ID}"
+  wget -q --auth-no-challenge --header='Accept:application/octet-stream' "https://${GITHUB_ACCESS_TOKEN}:@api.github.com/repos/${BZ_REPO}/releases/assets/${BZ_ASSET_ID}" -O "${BZ_GLOBAL_BIN}/bz"
+  chmod +x "${BZ_GLOBAL_BIN}/bz"
+fi
+echo "[INFO] bz resolved at $(command -v bz || echo '<none>')"
+
 echo "[INFO] initialising bz profile..."
 bz init profile -n "${ARGO_WORKFLOW_NAME:-local}-${RANDOM_TOKEN1}" --skip-prompt --secretsPath "${HOME}/secrets" \
   |& tee "${BZ_LOGS_DIR}/initialize.log" || true
