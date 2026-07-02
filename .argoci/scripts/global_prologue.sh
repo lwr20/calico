@@ -53,15 +53,18 @@ export CLUSTER_NAME=${CLUSTER_NAME:-bz-${PRODUCT}-${RANDOM_TOKEN1}}
 export DIAGS_ARCHIVE_FILENAME=${DIAGS_ARCHIVE_FILENAME:-${PROVISIONER}-${CLUSTER_NAME}-diags.tgz}
 
 # bz working directories and artifact bucket.
-export BZ_HOME=${BZ_HOME:-${HOME}/bz}
-export BZ_PROFILES_PATH="${BZ_PROFILES_PATH:-${BZ_HOME}}"
+# 'bz init profile -n NAME' creates the profile at <cwd>/NAME, and bz provision/
+# install/destroy must run from that dir. Init from $HOME (in a subshell so the
+# parent stays at repo root for the relative body_standard.sh call); BZ_HOME=$HOME/NAME.
+export BZ_PROFILE_NAME="${BZ_PROFILE_NAME:-${ARGO_WORKFLOW_NAME:-local}-${RANDOM_TOKEN1}}"
+export BZ_HOME="${BZ_HOME:-${HOME}/${BZ_PROFILE_NAME}}"
 export USE_HASH_RELEASE="${USE_HASH_RELEASE:-true}"
 export USE_LATEST_RELEASE="${USE_LATEST_RELEASE:-false}"
 export BZ_LOCAL_DIR=${BZ_LOCAL_DIR:-${BZ_HOME}/.local}
 export BZ_LOGS_DIR=${BZ_LOGS_DIR:-${HOME}/.bz/logs}
 export REPORT_DIR=${REPORT_DIR:-${BZ_LOCAL_DIR}/report/${TEST_TYPE}}
 export GS_BUCKET=${GS_BUCKET:-argoci-artifacts}
-mkdir -p "${BZ_HOME}" "${BZ_LOCAL_DIR}" "${BZ_LOGS_DIR}" "${REPORT_DIR}"
+mkdir -p "${BZ_LOGS_DIR}"   # BZ_HOME + .local are created by "bz init profile"
 
 # --- Install the banzai (bz) CLI: the ArgoCI runner image does not ship it ---
 # (Semaphore installed bz the same way; our earlier port wrongly assumed the
@@ -82,7 +85,8 @@ fi
 echo "[INFO] bz resolved at $(command -v bz || echo '<none>')"
 
 echo "[INFO] initialising bz profile..."
-bz init profile -n "${ARGO_WORKFLOW_NAME:-local}-${RANDOM_TOKEN1}" --skip-prompt --secretsPath "${HOME}/secrets" \
+( cd "${HOME}" && bz init profile -n "${BZ_PROFILE_NAME}" --skip-prompt --secretsPath "${HOME}/secrets" ) \
   |& tee "${BZ_LOGS_DIR}/initialize.log" || true
+mkdir -p "${BZ_LOCAL_DIR}" "${REPORT_DIR}"
 
 echo "[INFO] exiting prologue (PROVISIONER=${PROVISIONER} RELEASE_STREAM=${RELEASE_STREAM} CLUSTER_NAME=${CLUSTER_NAME})"
