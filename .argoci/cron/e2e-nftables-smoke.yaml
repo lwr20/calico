@@ -7,7 +7,7 @@
 #   argo submit --from cronwf/e2e-nftables-smoke -n <argoci-ns>
 version: condensed
 generateName: e2e-nftables-smoke-
-schedule: "28 12 * * *"   # ARMED one-shot
+schedule: "28 13 * * *"   # ARMED one-shot
 globalPrologue: |
     cd "${CI_HOME}/${CI_GIT_DIR}"   # checkout lands here; make our relative script paths resolve
     export DATAPLANE="${DATAPLANE:-CalicoNftables}"
@@ -17,9 +17,8 @@ globalPrologue: |
     export ENABLE_AUTOHEP="${ENABLE_AUTOHEP:-true}"
     export PRIVATE_REGISTRY="${PRIVATE_REGISTRY:-quay.io/}"
     export FUNCTIONAL_AREA="${FUNCTIONAL_AREA:-nftables.yml}"
-    export K8S_E2E_FLAGS="${K8S_E2E_FLAGS:---ginkgo.focus=should.function.for.intra-pod.communication:.http --ginkgo.skip=(\[Slow\]|\[Disruptive\]|\[Serial\])}"
+    export E2E_TEST_CONFIG="${E2E_TEST_CONFIG:-e2e/config/argoci-nftables-smoke.yaml}"
     # To make the smoke FAST, narrow the focus to a single quick test, e.g.:
-    #   export K8S_E2E_FLAGS="--ginkgo.focus=should.function.for.intra-pod.communication:.http"
     source .argoci/scripts/global_prologue.sh
 globalEpilogue: |
     source "${CI_HOME}/${CI_GIT_DIR}/.argoci/scripts/global_epilogue.sh"
