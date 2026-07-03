@@ -9,7 +9,7 @@
 # arm by editing schedule to a near-future one-shot + [update-cron-workflows].
 version: condensed
 generateName: e2e-migration-smoke-
-schedule: "23 15 * * *"   # ARMED one-shot
+schedule: "0 0 31 2 *"   # DISARMED (never fires; arm to a near-future one-shot to run)
 globalPrologue: |
     cd "${CI_HOME}/${CI_GIT_DIR}"   # checkout lands here; make relative script paths resolve
     export INSTALLER="${INSTALLER:-operator}"
