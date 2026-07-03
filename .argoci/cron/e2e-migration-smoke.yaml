@@ -1,6 +1,6 @@
 version: condensed
 generateName: e2e-migration-smoke-
-schedule: 16 16 * * *
+schedule: 56 16 * * *
 globalPrologue: 'cd "${CI_HOME}/${CI_GIT_DIR}"   # checkout lands here; make relative script paths resolve
 
   export INSTALLER="${INSTALLER:-operator}"
