@@ -1,38 +1,44 @@
-# SMOKE TEST — migration path. One gcp-kubeadm job with OPERATOR_MIGRATE=true, to
-# validate the migrate phase on a real ArgoCI run: phases/migrate.sh runs
-# operator_migrate.sh (installs the master operator + a default Installation as
-# the "old" side, verifies pod networking), then bz install brings up the master
-# hashrelease as the "new" side. Same-version (RELEASE_STREAM=master +
-# USE_HASH_RELEASE=true, from the prologue) — matches how the real
-# iptables/patch-verification OPERATOR_MIGRATE jobs run. NOT a cross-version
-# upgrade (that is upgrade.yml / UPLEVEL). Feb-31 schedule = never auto-fires;
-# arm by editing schedule to a near-future one-shot + [update-cron-workflows].
 version: condensed
 generateName: e2e-migration-smoke-
-schedule: "0 0 31 2 *"   # DISARMED (never fires; arm to a near-future one-shot to run)
-globalPrologue: |
-    cd "${CI_HOME}/${CI_GIT_DIR}"   # checkout lands here; make relative script paths resolve
-    export INSTALLER="${INSTALLER:-operator}"
-    export USE_PRIVATE_REGISTRY="${USE_PRIVATE_REGISTRY:-true}"
-    export PRIVATE_REGISTRY="${PRIVATE_REGISTRY:-quay.io/}"
-    export FUNCTIONAL_AREA="${FUNCTIONAL_AREA:-migration-smoke}"
-    export E2E_TEST_CONFIG="${E2E_TEST_CONFIG:-e2e/config/argoci-nftables-smoke.yaml}"
-    source .argoci/scripts/global_prologue.sh
-globalEpilogue: |
-    source "${CI_HOME}/${CI_GIT_DIR}/.argoci/scripts/global_epilogue.sh"
+schedule: 16 16 * * *
+globalPrologue: 'cd "${CI_HOME}/${CI_GIT_DIR}"   # checkout lands here; make relative script paths resolve
+
+  export INSTALLER="${INSTALLER:-operator}"
+
+  export USE_PRIVATE_REGISTRY="${USE_PRIVATE_REGISTRY:-true}"
+
+  export PRIVATE_REGISTRY="${PRIVATE_REGISTRY:-quay.io/}"
+
+  export FUNCTIONAL_AREA="${FUNCTIONAL_AREA:-migration-smoke}"
+
+  export E2E_TEST_CONFIG="${E2E_TEST_CONFIG:-e2e/config/argoci-nftables-smoke.yaml}"
+
+  source .argoci/scripts/global_prologue.sh
+
+  '
+globalEpilogue: 'source "${CI_HOME}/${CI_GIT_DIR}/.argoci/scripts/global_epilogue.sh"
+
+  '
 defaults:
-    secretBundles:
-        - banzai-secrets
+  secretBundles:
+  - banzai-secrets
 steps:
-    - name: smoke-migrate-gcp-kubeadm
-      services:
-        - docker
-      env:
-        - name: PROVISIONER
-          value: gcp-kubeadm
-        - name: K8S_VERSION
-          value: stable
-        - name: OPERATOR_MIGRATE
-          value: "true"
-      commands: |
-        .argoci/scripts/body_standard.sh
+- name: smoke-migrate-gcp-kubeadm
+  services:
+  - docker
+  env:
+  - name: PROVISIONER
+    value: gcp-kubeadm
+  - name: K8S_VERSION
+    value: stable
+  - name: OPERATOR_MIGRATE
+    value: 'true'
+  commands: '.argoci/scripts/body_standard.sh
+
+    '
+onExit:
+- name: noop-exit
+  checkout: false
+  commands: 'echo "migration smoke exit handler (no-op)"
+
+    '
