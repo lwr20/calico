@@ -1,9 +1,9 @@
 version: condensed
 generateName: e2e-migration-smoke-
-schedule: 56 16 * * *
+schedule: 1 18 * * *
 globalPrologue: 'cd "${CI_HOME}/${CI_GIT_DIR}"   # checkout lands here; make relative script paths resolve
 
-  export INSTALLER="${INSTALLER:-operator}"
+  export INSTALLER="${INSTALLER:-manual}"
 
   export USE_PRIVATE_REGISTRY="${USE_PRIVATE_REGISTRY:-true}"
 
@@ -38,7 +38,7 @@ steps:
     '
 onExit:
 - name: noop-exit
-  checkout: false
+  checkout: true
   commands: 'echo "migration smoke exit handler (no-op)"
 
     '
