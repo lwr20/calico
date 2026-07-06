@@ -1,11 +1,9 @@
 version: condensed
 generateName: e2e-kind-operator-smoke-
-schedule: 4 11 * * *
+schedule: 31 11 * * *
 globalPrologue: 'cd "${CI_HOME}/${CI_GIT_DIR}"   # checkout lands here; make relative script paths resolve
 
   export ARGO_WORKFLOW_NAME="{{workflow.name}}"
-
-  export BANZAI_CORE_BRANCH="argoci-kind-debug"
 
   export INSTALLER="${INSTALLER:-operator}"
 
@@ -41,7 +39,7 @@ steps:
   - name: PROVISIONER
     value: local-kind
   - name: K8S_VERSION
-    value: stable-3
+    value: stable-2
   - name: ENABLE_DUAL_STACK
     value: 'true'
   - name: ENCAPSULATION_TYPE
