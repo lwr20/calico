@@ -1,38 +1,46 @@
-# SMOKE TEST — one cheap gcp-kubeadm nftables job, to validate the ArgoCI
-# plumbing (checkout, secrets, bz provision/install/test, scripts, reporting)
-# on a real run before the full 9-step fan-out. NOT a faithful pipeline run.
-#
-# Place at .argoci/cron/e2e-nftables-smoke.yaml on an onboarded branch, let the
-# handler apply it, then run it on demand (the Feb-31 schedule never fires):
-#   argo submit --from cronwf/e2e-nftables-smoke -n <argoci-ns>
 version: condensed
 generateName: e2e-nftables-smoke-
-schedule: "47 13 * * *"   # ARMED one-shot
-globalPrologue: |
-    cd "${CI_HOME}/${CI_GIT_DIR}"   # checkout lands here; make our relative script paths resolve
-    export DATAPLANE="${DATAPLANE:-CalicoNftables}"
-    export KUBE_PROXY_MODE="${KUBE_PROXY_MODE:-nftables}"
-    export INSTALLER="${INSTALLER:-operator}"
-    export USE_PRIVATE_REGISTRY="${USE_PRIVATE_REGISTRY:-true}"
-    export ENABLE_AUTOHEP="${ENABLE_AUTOHEP:-true}"
-    export PRIVATE_REGISTRY="${PRIVATE_REGISTRY:-quay.io/}"
-    export FUNCTIONAL_AREA="${FUNCTIONAL_AREA:-nftables.yml}"
-    export E2E_TEST_CONFIG="${E2E_TEST_CONFIG:-e2e/config/argoci-nftables-smoke.yaml}"
-    # To make the smoke FAST, narrow the focus to a single quick test, e.g.:
-    source .argoci/scripts/global_prologue.sh
-globalEpilogue: |
-    source "${CI_HOME}/${CI_GIT_DIR}/.argoci/scripts/global_epilogue.sh"
+schedule: 47 13 * * *
+globalPrologue: 'cd "${CI_HOME}/${CI_GIT_DIR}"   # checkout lands here; make our relative script paths resolve
+
+  export ARGO_WORKFLOW_NAME="{{workflow.name}}"
+
+  export DATAPLANE="${DATAPLANE:-CalicoNftables}"
+
+  export KUBE_PROXY_MODE="${KUBE_PROXY_MODE:-nftables}"
+
+  export INSTALLER="${INSTALLER:-operator}"
+
+  export USE_PRIVATE_REGISTRY="${USE_PRIVATE_REGISTRY:-true}"
+
+  export ENABLE_AUTOHEP="${ENABLE_AUTOHEP:-true}"
+
+  export PRIVATE_REGISTRY="${PRIVATE_REGISTRY:-quay.io/}"
+
+  export FUNCTIONAL_AREA="${FUNCTIONAL_AREA:-nftables.yml}"
+
+  export E2E_TEST_CONFIG="${E2E_TEST_CONFIG:-e2e/config/argoci-nftables-smoke.yaml}"
+
+  # To make the smoke FAST, narrow the focus to a single quick test, e.g.:
+
+  source .argoci/scripts/global_prologue.sh
+
+  '
+globalEpilogue: 'source "${CI_HOME}/${CI_GIT_DIR}/.argoci/scripts/global_epilogue.sh"
+
+  '
 defaults:
-    secretBundles:
-        - banzai-secrets
+  secretBundles:
+  - banzai-secrets
 steps:
-    - name: smoke-gcp-kubeadm
-      services:
-        - docker
-      env:
-        - name: PROVISIONER
-          value: gcp-kubeadm
-        - name: K8S_VERSION
-          value: stable
-      commands: |
-        .argoci/scripts/body_standard.sh
+- name: smoke-gcp-kubeadm
+  services:
+  - docker
+  env:
+  - name: PROVISIONER
+    value: gcp-kubeadm
+  - name: K8S_VERSION
+    value: stable
+  commands: '.argoci/scripts/body_standard.sh
+
+    '

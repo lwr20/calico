@@ -3,6 +3,8 @@ generateName: e2e-migration-smoke-
 schedule: 1 18 * * *
 globalPrologue: 'cd "${CI_HOME}/${CI_GIT_DIR}"   # checkout lands here; make relative script paths resolve
 
+  export ARGO_WORKFLOW_NAME="{{workflow.name}}"
+
   export INSTALLER="${INSTALLER:-manual}"
 
   export USE_PRIVATE_REGISTRY="${USE_PRIVATE_REGISTRY:-true}"

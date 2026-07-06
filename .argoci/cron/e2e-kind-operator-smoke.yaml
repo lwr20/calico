@@ -3,6 +3,8 @@ generateName: e2e-kind-operator-smoke-
 schedule: 56 08 * * *
 globalPrologue: 'cd "${CI_HOME}/${CI_GIT_DIR}"   # checkout lands here; make relative script paths resolve
 
+  export ARGO_WORKFLOW_NAME="{{workflow.name}}"
+
   export INSTALLER="${INSTALLER:-operator}"
 
   export USE_PRIVATE_REGISTRY="${USE_PRIVATE_REGISTRY:-true}"
