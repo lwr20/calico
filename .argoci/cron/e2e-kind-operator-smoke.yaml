@@ -1,6 +1,6 @@
 version: condensed
 generateName: e2e-kind-operator-smoke-
-schedule: 20 10 * * *
+schedule: 45 10 * * *
 globalPrologue: 'cd "${CI_HOME}/${CI_GIT_DIR}"   # checkout lands here; make relative script paths resolve
 
   export ARGO_WORKFLOW_NAME="{{workflow.name}}"
