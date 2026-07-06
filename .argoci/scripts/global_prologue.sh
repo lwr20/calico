@@ -106,7 +106,7 @@ if ! python3 -c 'import yaml' 2>/dev/null; then
 fi
 
 echo "[INFO] initialising bz profile..."
-( cd "${HOME}" && bz init profile -n "${BZ_PROFILE_NAME}" --skip-prompt --secretsPath "${HOME}/secrets" ) \
+( cd "${HOME}" && bz init profile -n "${BZ_PROFILE_NAME}" ${BANZAI_CORE_BRANCH:+--core-branch "${BANZAI_CORE_BRANCH}"} --skip-prompt --secretsPath "${HOME}/secrets" ) \
   |& tee "${BZ_LOGS_DIR}/initialize.log" || true
 mkdir -p "${BZ_LOCAL_DIR}" "${REPORT_DIR}" "${BZ_LOCAL_DIR}/config"
 # bz provision prereq wants the docker auth at <profile>/.local/config/docker_auth.json
