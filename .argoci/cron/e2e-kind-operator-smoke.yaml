@@ -1,6 +1,6 @@
 version: condensed
 generateName: e2e-kind-operator-smoke-
-schedule: 56 09 * * *
+schedule: 20 10 * * *
 globalPrologue: 'cd "${CI_HOME}/${CI_GIT_DIR}"   # checkout lands here; make relative script paths resolve
 
   export ARGO_WORKFLOW_NAME="{{workflow.name}}"
@@ -54,6 +54,10 @@ steps:
     value: 192.168.0.0/16
   - name: IPV6_POD_CIDR
     value: fd00:10:244::/64
+  - name: CLUSTER_NODES
+    value: '0'
+  - name: CLUSTER_MASTER_NODES
+    value: '1'
   commands: '.argoci/scripts/body_standard.sh
 
     '
