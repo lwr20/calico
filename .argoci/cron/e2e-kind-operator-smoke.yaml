@@ -1,50 +1,55 @@
-# ISOLATION SMOKE — local-kind + OPERATOR install (NO migration). The master
-# hashrelease operator install is known-good on gcp-kubeadm; run the same install
-# on local-kind to isolate whether KinD itself works on ArgoCI. If this fails,
-# the problem is KinD (provisioner path), not the manifest/migration flow.
-# Trigger on demand: comment `/argoci cron e2e-kind-operator-smoke.yaml` on an issue/PR.
 version: condensed
 generateName: e2e-kind-operator-smoke-
-schedule: "0 0 31 2 *"   # never auto-fires; run via /argoci cron
-globalPrologue: |
-    cd "${CI_HOME}/${CI_GIT_DIR}"   # checkout lands here; make relative script paths resolve
-    export INSTALLER="${INSTALLER:-operator}"
-    export USE_PRIVATE_REGISTRY="${USE_PRIVATE_REGISTRY:-true}"
-    export PRIVATE_REGISTRY="${PRIVATE_REGISTRY:-quay.io/}"
-    export FUNCTIONAL_AREA="${FUNCTIONAL_AREA:-kind-operator-smoke}"
-    export E2E_TEST_CONFIG="${E2E_TEST_CONFIG:-e2e/config/argoci-nftables-smoke.yaml}"
-    source .argoci/scripts/global_prologue.sh
-globalEpilogue: |
-    source "${CI_HOME}/${CI_GIT_DIR}/.argoci/scripts/global_epilogue.sh"
+schedule: 56 08 * * *
+globalPrologue: 'cd "${CI_HOME}/${CI_GIT_DIR}"   # checkout lands here; make relative script paths resolve
+
+  export INSTALLER="${INSTALLER:-operator}"
+
+  export USE_PRIVATE_REGISTRY="${USE_PRIVATE_REGISTRY:-true}"
+
+  export PRIVATE_REGISTRY="${PRIVATE_REGISTRY:-quay.io/}"
+
+  export FUNCTIONAL_AREA="${FUNCTIONAL_AREA:-kind-operator-smoke}"
+
+  export E2E_TEST_CONFIG="${E2E_TEST_CONFIG:-e2e/config/argoci-nftables-smoke.yaml}"
+
+  source .argoci/scripts/global_prologue.sh
+
+  '
+globalEpilogue: 'source "${CI_HOME}/${CI_GIT_DIR}/.argoci/scripts/global_epilogue.sh"
+
+  '
 defaults:
-    secretBundles:
-        - banzai-secrets
+  secretBundles:
+  - banzai-secrets
 onExit:
-    - name: noop-exit
-      checkout: true
-      commands: |
-        echo "kind-operator smoke exit handler (no-op)"
+- name: noop-exit
+  checkout: true
+  commands: 'echo "kind-operator smoke exit handler (no-op)"
+
+    '
 steps:
-    - name: kind-operator
-      jobSize: large
-      services:
-        - docker
-      env:
-        - name: PROVISIONER
-          value: local-kind
-        - name: K8S_VERSION
-          value: stable-3
-        - name: ENABLE_DUAL_STACK
-          value: "true"
-        - name: ENCAPSULATION_TYPE
-          value: VXLAN
-        - name: ENCAPSULATION_TYPE_V6
-          value: VXLAN
-        - name: IP_FAMILY
-          value: dual
-        - name: IPV4_POD_CIDR
-          value: 192.168.0.0/16
-        - name: IPV6_POD_CIDR
-          value: "fd00:10:244::/64"
-      commands: |
-        .argoci/scripts/body_standard.sh
+- name: kind-operator
+  jobSize: large
+  services:
+  - docker
+  env:
+  - name: PROVISIONER
+    value: local-kind
+  - name: K8S_VERSION
+    value: stable-3
+  - name: ENABLE_DUAL_STACK
+    value: 'true'
+  - name: ENCAPSULATION_TYPE
+    value: VXLAN
+  - name: ENCAPSULATION_TYPE_V6
+    value: VXLAN
+  - name: IP_FAMILY
+    value: dual
+  - name: IPV4_POD_CIDR
+    value: 192.168.0.0/16
+  - name: IPV6_POD_CIDR
+    value: fd00:10:244::/64
+  commands: '.argoci/scripts/body_standard.sh
+
+    '
