@@ -1,0 +1,65 @@
+version: condensed
+generateName: e2e-hcp-plumbing-smoke-
+schedule: 53 15 * * *
+globalPrologue: |
+  cd "${CI_HOME}/${CI_GIT_DIR}"
+  export ARGO_WORKFLOW_NAME="{{workflow.name}}"
+  export FUNCTIONAL_AREA="${FUNCTIONAL_AREA:-hcp-plumbing-smoke}"
+  export INSTALLER="${INSTALLER:-operator}"
+  source .argoci/scripts/global_prologue.sh
+globalEpilogue: |
+  source "${CI_HOME}/${CI_GIT_DIR}/.argoci/scripts/global_epilogue.sh"
+defaults:
+  secretBundles:
+    - banzai-secrets
+onExit:
+  # Validates the destroy-hosting path: restore hosting BZ_HOME (prologue) ->
+  # bz destroy (epilogue) -> gsutil rm the blob. Runs regardless of outcome.
+  - name: hcp-destroy-hosting
+    services:
+      - docker
+    env:
+      - name: PROVISIONER
+        value: local-kind
+      - name: HCP_STAGE
+        value: destroy-hosting
+      - name: HOSTING_CLUSTER
+        value: hcp-plumbing
+    commands: |
+      .argoci/scripts/body_standard.sh
+steps:
+  # setup-hosting: create a kind "hosting" cluster, skip tests, push BZ_HOME.
+  - name: hcp-setup-hosting
+    services:
+      - docker
+    env:
+      - name: PROVISIONER
+        value: local-kind
+      - name: K8S_VERSION
+        value: stable-2
+      - name: HCP_STAGE
+        value: setup-hosting
+      - name: HOSTING_CLUSTER
+        value: hcp-plumbing
+    commands: |
+      .argoci/scripts/body_standard.sh
+  # hosted: pull the hosting kubeconfig (prologue), create a kind cluster, run a
+  # minimal test set. Validates the pull + OPENSHIFT_HOSTING_KUBECONFIG export.
+  - name: hcp-hosted
+    services:
+      - docker
+    depends:
+      - hcp-setup-hosting
+    env:
+      - name: PROVISIONER
+        value: local-kind
+      - name: K8S_VERSION
+        value: stable-2
+      - name: HCP_STAGE
+        value: hosted
+      - name: HOSTING_CLUSTER
+        value: hcp-plumbing
+      - name: E2E_TEST_CONFIG
+        value: e2e/config/argoci-nftables-smoke.yaml
+    commands: |
+      .argoci/scripts/body_standard.sh
