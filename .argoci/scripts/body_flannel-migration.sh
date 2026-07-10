@@ -16,7 +16,14 @@ echo "[INFO] starting job..."
 
 export CNI_VERSION=${CNI_VERSION:-"v1.1.1"}
 export DOCS_BASE=${DOCS_BASE:-"https://github.com/projectcalico/calico"}
-export DOWNLEVEL_MANIFEST=${DOWNLEVEL_MANIFEST:-"https://github.com/projectcalico/calico/raw/release-${RELEASE_STREAM}/manifests/canal.yaml"}
+# canal.yaml branch ref: master publishes at raw/master, release streams at
+# raw/release-vX.Y. release-master is not a real ref and 404s.
+if [[ "${RELEASE_STREAM}" == "master" ]]; then
+  _canal_ref="master"
+else
+  _canal_ref="release-${RELEASE_STREAM}"
+fi
+export DOWNLEVEL_MANIFEST=${DOWNLEVEL_MANIFEST:-"https://github.com/projectcalico/calico/raw/${_canal_ref}/manifests/canal.yaml"}
 export CALICO_MANIFEST=${CALICO_MANIFEST:-"manifests/flannel-migration/calico.yaml"}
 export MIGRATION_MANIFEST=${MIGRATION_MANIFEST:-"manifests/flannel-migration/migration-job.yaml"}
 
@@ -77,18 +84,21 @@ spec:
           operator: Exists
         - effect: NoExecute
           operator: Exists
-      terminationGracePeriodSeconds: 0
       priorityClassName: system-node-critical
       securityContext:
         seccompProfile:
           type: RuntimeDefault
       initContainers:
       - name: cni-installer
-        image: quay.io/dosmith/cni-plugins:gen4
-        command: ["/bin/bash", "-c", "cp -f /usr/src/plugins/bin/* /opt/cni/bin"]
+        # rancher/hardened-cni-plugins: org-owned build of the upstream CNI plugins
+        # (no first-party image exists), digest-pinned, replacing a personal quay
+        # namespace. Plugins live at /opt/cni/bin, so mount the host dir at
+        # /host/opt/cni/bin (mounting over /opt/cni/bin would hide them).
+        image: docker.io/rancher/hardened-cni-plugins:v1.9.1-build20260608@sha256:7db40c944c284cfcf0caa6912d69492f2a62b0575ae75f8284a80252874760f5
+        command: ["/bin/sh", "-c", "cp -f /opt/cni/bin/* /host/opt/cni/bin"]
         volumeMounts:
         - name: bindir
-          mountPath: /opt/cni/bin
+          mountPath: /host/opt/cni/bin
         securityContext:
           privileged: true
         resources:
@@ -117,7 +127,7 @@ kubectl get po -A -owide
 
 # Run a basic services test to check that flannel networking is working.
 K8S_E2E_FLAGS='--ginkgo.focus=should.serve.a.basic.endpoint.from.pods' \
-  ./bz.sh tests:run |& tee >(gzip --stdout > "${BZ_LOGS_DIR}/e2e-tests-pre.log")
+  ./bz.sh tests:run |& tee >(gzip --stdout > "${BZ_LOGS_DIR}/e2e-tests-pre.log.gz")
 
 kubectl delete -n kube-system ds cni-installer || true  # remove the CNI installer daemonset
 kubectl apply -f "$DOCS_URL/$CALICO_MANIFEST"
@@ -127,7 +137,29 @@ sleep 5  # make sure the job has started before we check its status
 kubectl -n kube-system get jobs flannel-migration
 kubectl -n kube-system describe jobs flannel-migration
 kubectl get po -A -owide
-kubectl wait --for=condition=complete --timeout=600s -n kube-system job/flannel-migration
+# Poll for complete|failed: `kubectl wait --for=condition=complete` never returns
+# on a failed Job, blocking the full timeout. Catch failure immediately instead.
+_deadline=$((SECONDS + 600))
+while true; do
+  _complete=$(kubectl get job/flannel-migration -n kube-system -o jsonpath='{.status.conditions[?(@.type=="Complete")].status}' 2>/dev/null || true)
+  _failed=$(kubectl get job/flannel-migration -n kube-system -o jsonpath='{.status.conditions[?(@.type=="Failed")].status}' 2>/dev/null || true)
+  if [[ "${_complete}" == "True" ]]; then
+    echo "[INFO] flannel-migration completed"
+    break
+  fi
+  if [[ "${_failed}" == "True" ]]; then
+    echo "[ERROR] flannel-migration job failed"
+    kubectl -n kube-system describe job/flannel-migration
+    kubectl -n kube-system logs -l k8s-app=flannel-migration-controller || true
+    exit 1
+  fi
+  if (( SECONDS >= _deadline )); then
+    echo "[ERROR] flannel-migration did not reach a terminal state within 600s"
+    kubectl -n kube-system describe job/flannel-migration
+    exit 1
+  fi
+  sleep 10
+done
 kubectl -n kube-system get jobs flannel-migration
 kubectl -n kube-system describe jobs flannel-migration
 kubectl -n kube-system logs -l k8s-app=flannel-migration-controller
@@ -139,4 +171,4 @@ kubectl -n kube-system delete job/flannel-migration || true
 kubectl -n kube-system delete po -l k8s-app=flannel-migration-controller || true
 
 # Run e2e on uplevel calico.
-./bz.sh tests:run |& tee >(gzip --stdout > "${BZ_LOGS_DIR}/e2e-tests.log")
+./bz.sh tests:run |& tee >(gzip --stdout > "${BZ_LOGS_DIR}/e2e-tests.log.gz")

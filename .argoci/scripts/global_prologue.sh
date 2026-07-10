@@ -91,7 +91,17 @@ export TEST_TYPE=${TEST_TYPE:-k8s-e2e}
 export GOOGLE_PROJECT=${GOOGLE_PROJECT:-unique-caldron-775}
 export GOOGLE_REGIONS=("us-central1" "us-west1")
 export GOOGLE_REGION=${GOOGLE_REGION:-${GOOGLE_REGIONS[RANDOM%${#GOOGLE_REGIONS[@]}]}}
-export GOOGLE_ZONE=${GOOGLE_ZONE:-$(gcloud compute zones list --filter="region~'$GOOGLE_REGION'" --format="value(name)" | awk 'BEGIN {srand()} {a[NR]=$0} rand() * NR < 1 {zone=$0} END {print zone}')}
+# GOOGLE_ZONE: GCP jobs only. Pick a random zone, failing fast if empty -- the awk
+# pipeline exits 0 even on no output, so a gcloud failure would proceed with an
+# empty zone. (Semaphore computed it on every job, including AWS.)
+if [[ -z "${GOOGLE_ZONE:-}" && "${PROVISIONER}" == gcp-* ]]; then
+  GOOGLE_ZONE=$(gcloud compute zones list --filter="region~'$GOOGLE_REGION'" --format="value(name)" | awk 'BEGIN {srand()} {a[NR]=$0} rand() * NR < 1 {zone=$0} END {print zone}')
+  if [[ -z "${GOOGLE_ZONE}" ]]; then
+    echo "[ERROR] GOOGLE_ZONE lookup returned empty for region '${GOOGLE_REGION}' (gcloud failure?)" >&2
+    exit 1
+  fi
+  export GOOGLE_ZONE
+fi
 export GOOGLE_NETWORK=${GOOGLE_NETWORK:-semaphore-autotest}
 export AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION:-us-west-2}
 
@@ -102,7 +112,14 @@ export AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION:-us-west-2}
 export RELEASE_STREAM=${RELEASE_STREAM:-$( _b="${CI_GIT_CLONED_BRANCH:-${BRANCH:-master}}"; [[ "${_b}" =~ ^release-(v[0-9]+\.[0-9]+)$ ]] && echo "${BASH_REMATCH[1]}" || echo "master" )}
 
 export K8S_VERSION=${K8S_VERSION:-stable-3}
-export K8S_E2E_EXTRA_FLAGS=${K8S_E2E_EXTRA_FLAGS:-" --e2ecfg.calicoctl-opensource-image=calico/ctl:release-${RELEASE_STREAM} "}
+# calicoctl image: master publishes calico/ctl:master, not release-master. Inert
+# on the make e2e-run path; consumed by `bz tests`.
+if [[ "${RELEASE_STREAM}" == "master" ]]; then
+  _calicoctl_image="calico/ctl:master"
+else
+  _calicoctl_image="calico/ctl:release-${RELEASE_STREAM}"
+fi
+export K8S_E2E_EXTRA_FLAGS=${K8S_E2E_EXTRA_FLAGS:-" --e2ecfg.calicoctl-opensource-image=${_calicoctl_image} "}
 export HELM_PATCH=${HELM_PATCH:-"0"}
 export CALICOCTL_INSTALL_TYPE=${CALICOCTL_INSTALL_TYPE:-"binary"}
 
