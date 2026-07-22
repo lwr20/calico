@@ -1,0 +1,18 @@
+version: condensed
+generateName: http-cache-proxy-smoke-
+steps:
+  - name: proxy-smoke
+    services: [http-cache-proxy]
+    checkout: false
+    commands: |
+      echo "[test] HTTPS_PROXY=$HTTPS_PROXY"
+      echo "[test] NO_PROXY=$NO_PROXY"
+      # Runner image v0.104 doesn't yet trust the proxy CA; install it inline for this test.
+      echo "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSURhakNDQWxLZ0F3SUJBZ0lVTExiQTVXM0Z5UStCcEc2T0pGMnNvcG8rUWZvd0RRWUpLb1pJaHZjTkFRRUwKQlFBd096RWxNQ01HQTFVRUF3d2NZWEpuYjJOcExXZHBkR2gxWWkxallXTm9aUzF3Y205NGVTQkRRVEVTTUJBRwpBMVVFQ2d3SlZHbG5aWEpoSUVSRk1CNFhEVEkyTURjeU1URXdOVGsxTmxvWERUTTJNRGN4T0RFd05UazFObG93Ck96RWxNQ01HQTFVRUF3d2NZWEpuYjJOcExXZHBkR2gxWWkxallXTm9aUzF3Y205NGVTQkRRVEVTTUJBR0ExVUUKQ2d3SlZHbG5aWEpoSUVSRk1JSUJJakFOQmdrcWhraUc5dzBCQVFFRkFBT0NBUThBTUlJQkNnS0NBUUVBd0oxRwpaY210bEhEVHJJcnRGRzAwemJWYmpMbUQydE96SHZZZ05zR2p0V3I1ZnhtSkEyeXZLOXN3SWlGNmV4dlRzM2FnClZUS1I2enJwY3FmZlNOeVE4ZEU2Ky84NDQ4TVlqditwNUgvMVVmdUhVY3BtdFhTbG1yVHJHYjZLNEpHZHI4dkMKZjBSbXVYWlFMdWcrTEM4bzZ6ZkxWamNsZVRvYXd5MW1KSFlWcVpWVHhEc1RZc2FXN2pyZ1ROMzdYV0EvVkhSbgptMkxJdkJmSXowUUIvemwyK3JvWWhEV042cmVObCsxdG9TY010QmhwSkpKV2swQTJ2L0p1NnFDMWdGd0tnaThmCnBtN2YrRkFQek9MTy9aVEdUUmV5b3BJRmJlOVl1a0R4TFJhUmVJMmdJcWgzVUN4aVg3MjBqdmpXVEMvTFZVNkEKbzZJNkNHQ0xjb3JMOWtXTnZRSURBUUFCbzJZd1pEQWRCZ05WSFE0RUZnUVVBc0kwNERHS0ZRSzVsenI4S0phMgo2SSt0WjJVd0h3WURWUjBqQkJnd0ZvQVVBc0kwNERHS0ZRSzVsenI4S0phMjZJK3RaMlV3RWdZRFZSMFRBUUgvCkJBZ3dCZ0VCL3dJQkFEQU9CZ05WSFE4QkFmOEVCQU1DQVFZd0RRWUpLb1pJaHZjTkFRRUxCUUFEZ2dFQkFDYlMKTWZTMmhXQ2tUTyszejlWUmVpdHg0bGZmamwzeDgvbW5ibTlXdi90Z2xuY1owQ28vOCsxeHhpQlNCaDJ4YUVLQwpqbVo3MWs1ZkY2RDBMMTJtWGpra0FCc1BpQ0NoMDlpRm14NGVaZzh1V05aRUpsL1ZjbUtHRU9QVWxrZm1Lb1VvClVlenpBWWRVOEdveWhTRDNZU0szV1hxQVRYQm5EYThMMVE0TXc3UnhDSWFOU1QySW13aDVnSENuY3NwYkJaL2wKQWVxdWNFZzRoYzVuUXY2UHBYalpkZkxsWFJTOURucWRuVE52ckZaN0xBdTdzdzkyK09FMGtSZHJvMVVqck1EbwpaT0p0djVMODhFTHBzaFh3ajRtWUJ1RytVcFJ5NFNXVjVYYktuSUNKaStJTFZ3YmNTZUp2Q1BtT09sRHl3OFRXCmhsblF5RzdCWnN0MUNmNkd0N0U9Ci0tLS0tRU5EIENFUlRJRklDQVRFLS0tLS0K" | base64 -d | sudo tee /usr/local/share/ca-certificates/argoci-github-cache-proxy.crt >/dev/null
+      sudo update-ca-certificates
+      URL="https://api.github.com/repos/projectcalico/calico/releases/latest"
+      echo "[test] three identical GitHub API calls via the proxy (2nd/3rd should be cache HITs):"
+      for n in 1 2 3; do
+        curl -sS -o /dev/null -w "  call$n: http=%{http_code} time=%{time_total}s\n" "$URL"
+      done
+      echo "[test] done - check github-cache-proxy pod access.log for TCP_MEM_HIT"
