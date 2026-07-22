@@ -1,0 +1,6 @@
+version: v2
+workflows:
+  - name: http-cache-proxy-smoke
+    workflowFile: .argoci/proxy-smoke.yaml
+    runWhen:
+      alwaysRunOnPR: true
