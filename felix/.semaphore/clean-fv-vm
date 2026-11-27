@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# Copyright (c) 2026 Tigera, Inc. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# clean-fv-vm <vm name>
+#
+# Readies a test VM for its next FV batch, run from the pod with VM_NAME and
+# ZONE set.  A non-zero exit retires the VM rather than risk a batch inheriting
+# another's state.
+
+set -e
+
+repo_dir="$(cd "$(dirname "$0")/../.." && pwd)"
+export VM_NAME="${VM_NAME:-$1}"
+
+# ssh -n gives the remote no stdin, so the script travels as an argument.
+# /tmp entries older than the setup marker are the loaded FV artifacts; the
+# excluded ones belong to systemd and to this SSH session.
+# shellcheck disable=SC2016 # expanded on the VM
+remote='set -e
+calico_dir="$1"
+containers="$(docker ps -aq)"
+[ -z "$containers" ] || docker rm -f $containers >/dev/null
+docker network prune -f >/dev/null
+sudo find /tmp -mindepth 1 -maxdepth 1 -newer /var/tmp/vm-runner-setup-done \
+  ! -name "systemd-private-*" ! -name "snap-private-tmp" ! -name "ssh-*" -exec rm -rf {} +
+rm -rf "$calico_dir/felix/fv/cwlogs"
+mkdir -p "$calico_dir/felix/fv/cwlogs"
+left="$(docker ps -aq | wc -l)"
+if [ "$left" -ne 0 ]; then
+  echo "clean-fv-vm: $left containers survived docker rm" >&2
+  exit 1
+fi'
+"$repo_dir/.semaphore/vms/on-test-vm" "bash -c $(printf %q "$remote") _ $(printf %q "${CALICO_DIR_NAME:-calico}")"

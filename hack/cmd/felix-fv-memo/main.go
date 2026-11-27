@@ -123,6 +123,8 @@ var nonBPFBuild = fvBuild{
 		"./node/pkg/node",
 		// Not run by FV, but a change to how keys are computed must change them.
 		"./hack/cmd/felix-fv-memo",
+		// Runs the batches whose passes the keys cache.
+		"./hack/cmd/vm-runner",
 	},
 }
 
