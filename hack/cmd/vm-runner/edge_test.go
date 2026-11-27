@@ -23,6 +23,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"google.golang.org/api/googleapi"
 )
 
 func TestRejectedCreatesFailFast(t *testing.T) {
@@ -130,6 +132,52 @@ func TestTimeoutWithPassingPartialReportStillFails(t *testing.T) {
 	}
 	if !exists(filepath.Join(h.cfg.Artifacts, "1", "report", "vm-runner_timeout_001.xml")) {
 		t.Error("no failing JUnit beside the partial, passing report")
+	}
+}
+
+func TestFirstSuiteFailureSettlesAMultiSuiteJob(t *testing.T) {
+	// make stops after the failing first suite, so the second never prints.
+	if got := logVerdict([]byte("DONE 40 tests, 1 failure in 12.0s\n"), 2); got != OutcomeFail {
+		t.Errorf("got %q, want fail", got)
+	}
+}
+
+func TestTransientInsertErrorsAreRetryable(t *testing.T) {
+	for _, code := range []int{429, 500, 502} {
+		if err := classifyRejection(&googleapi.Error{Code: code}); !isCapacityError(err) {
+			t.Errorf("HTTP %d treated as a permanent rejection", code)
+		}
+	}
+}
+
+func TestUnsafeJobIDsAreRefused(t *testing.T) {
+	for _, id := range []string{"bpf ut", "a/../x", ".hidden", "x;rm"} {
+		if err := validateJobs([]Job{{ID: id, Command: []string{"x"}, TimeoutMinutes: 1}}); err == nil {
+			t.Errorf("id %q accepted", id)
+		}
+	}
+	if err := validateJobs([]Job{{ID: "ut-1.b_2", Command: []string{"x"}, TimeoutMinutes: 1}}); err != nil {
+		t.Error(err)
+	}
+}
+
+func TestVMCreatedForAJobGoesToIt(t *testing.T) {
+	h := newHarness(t, 1)
+	// Batch 1 is lost twice, so needs on demand, while 2 and 3 are queued.
+	h.results.plan = func(vm VM, run JobRun) fakeJob {
+		if run.Job.ID == "1" && run.Attempt < 3 {
+			return fakeJob{vanish: true}
+		}
+		return passJob()
+	}
+	recs := byID(h.run(fvJobs(3)))
+	if r := recs["1"]; r.Outcome != OutcomePass || r.Attempts[2].Model != Standard {
+		t.Errorf("job 1: %s, last on %s", r.Outcome, r.Attempts[len(r.Attempts)-1].Model)
+	}
+	for _, r := range recs {
+		if r.ID != "1" && r.Outcome != OutcomePass {
+			t.Errorf("job %s: %s", r.ID, r.Outcome)
+		}
 	}
 }
 

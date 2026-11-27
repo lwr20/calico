@@ -169,6 +169,7 @@ func (r *Runner) execute(ctx context.Context, ar *attemptRun) (Outcome, string, 
 		if r.now().After(deadline) {
 			r.logf("%s timed out after %v on %s.", ar.prefix, run.Job.Timeout(), vm.Name)
 			r.stopJob(ar)
+			r.awaitStopped(ctx, ar)
 			r.captureSerial(ctx, ar)
 			// Whatever reports exist show where it hung.
 			_ = r.fetch(ctx, ar)
@@ -181,6 +182,21 @@ func (r *Runner) stopJob(ar *attemptRun) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	_ = r.results.Kill(ctx, ar.vm, ar.run)
+}
+
+// awaitStopped gives a killed job's traps time to write its outputs.
+func (r *Runner) awaitStopped(ctx context.Context, ar *attemptRun) {
+	deadline := r.now().Add(r.cfg.PollRetryWindow)
+	for r.now().Before(deadline) {
+		st, err := r.results.Status(ctx, ar.vm, ar.run)
+		if err == nil && st.State != Running {
+			r.pullLog(ctx, ar)
+			return
+		}
+		if !sleepCtx(ctx, r.cfg.PollInterval) {
+			return
+		}
+	}
 }
 
 // collect fetches a finished job's outputs and records the result.

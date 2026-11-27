@@ -42,12 +42,22 @@ const sshUser = "ubuntu"
 // sshRemote forks ssh and scp, so the setup and clean scripts share its keys and known_hosts.
 type sshRemote struct {
 	runTimeout time.Duration
+	// identity is the private key whose public half is on the VMs.
+	identity string
+}
+
+func (s sshRemote) options() []string {
+	opts := slicesClone(sshOptions)
+	if s.identity != "" {
+		opts = append(opts, "-i", s.identity)
+	}
+	return opts
 }
 
 func (s sshRemote) Run(ctx context.Context, vm VM, cmd string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, s.runTimeout)
 	defer cancel()
-	args := append(slicesClone(sshOptions), "-n", sshUser+"@"+vm.IP, cmd)
+	args := append(s.options(), "-n", sshUser+"@"+vm.IP, cmd)
 	var stderr bytes.Buffer
 	c := exec.CommandContext(ctx, "ssh", args...)
 	c.Stderr = &stderr
@@ -59,7 +69,7 @@ func (s sshRemote) Run(ctx context.Context, vm VM, cmd string) ([]byte, error) {
 }
 
 func (s sshRemote) CopyFrom(ctx context.Context, vm VM, remote, local string) error {
-	args := append(slicesClone(sshOptions), "-r", "-C", sshUser+"@"+vm.IP+":"+remote, local)
+	args := append(s.options(), "-r", "-C", sshUser+"@"+vm.IP+":"+remote, local)
 	out, err := exec.CommandContext(ctx, "scp", args...).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("scp from %s: %w: %s", vm.Name, err, strings.TrimSpace(string(out)))
@@ -102,16 +112,19 @@ func (s sshResults) Start(ctx context.Context, vm VM, run JobRun) error {
 	fmt.Fprintf(&b, "printf '%%s\\n' %s > %s/cmd; ", shq(strings.Join(quoted, " ")), shq(d))
 	// setsid makes the job a process group that Kill can signal as a whole;
 	// rc is renamed into place so a reader never sees half of it.
-	inner := fmt.Sprintf("echo $$ > %[1]s/pid; bash %[1]s/cmd > %[1]s/log 2>&1; echo $? > %[1]s/rc.tmp; mv %[1]s/rc.tmp %[1]s/rc", d)
+	// The wrapper traps TERM rather than ignoring it, which the job would
+	// inherit; so a killed job still gets an rc once its own traps have run.
+	inner := fmt.Sprintf("trap : TERM; echo $$ > %[1]s/pid; bash %[1]s/cmd > %[1]s/log 2>&1; echo $? > %[1]s/rc.tmp; mv %[1]s/rc.tmp %[1]s/rc", d)
 	fmt.Fprintf(&b, "setsid nohup bash -c %s < /dev/null > /dev/null 2>&1 &", shq(inner))
 	_, err := s.remote.Run(ctx, vm, b.String())
 	return err
 }
 
+// Status checks rc again after the pid: the job may finish between the two.
 func (s sshResults) Status(ctx context.Context, vm VM, run JobRun) (Status, error) {
 	d := shq(attemptDir(run))
 	out, err := s.remote.Run(ctx, vm, fmt.Sprintf(
-		`cd %s 2>/dev/null || { echo gone; exit 0; }; if [ -f rc ]; then echo "done $(cat rc)"; elif [ -f pid ] && kill -0 "$(cat pid)" 2>/dev/null; then echo running; elif [ ! -f pid ]; then echo running; else echo gone; fi`, d))
+		`cd %s 2>/dev/null || { echo gone; exit 0; }; if [ -f rc ]; then echo "done $(cat rc)"; elif [ -f pid ] && kill -0 "$(cat pid)" 2>/dev/null; then echo running; elif [ ! -f pid ]; then echo running; elif [ -f rc ]; then echo "done $(cat rc)"; else echo gone; fi`, d))
 	if err != nil {
 		return Status{}, err
 	}

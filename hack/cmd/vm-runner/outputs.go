@@ -168,6 +168,8 @@ func preemptLines(run, lane string, jobs []JobRecord) []string {
 					outcome = "retried-pass"
 				case OutcomeLost:
 					outcome = "lost"
+				case OutcomeNotRun:
+					outcome = "retried-not-run"
 				default:
 					outcome = "retried-fail"
 				}

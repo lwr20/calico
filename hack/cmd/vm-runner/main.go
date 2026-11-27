@@ -199,8 +199,10 @@ func felixCommand(s felixSettings, makeArgv []string) []string {
 		// cache entry, so it must not run at all.
 		script.WriteString(shq(s.CalicoDir+"/felix/.semaphore/strip-bpf-gpl-objects") + " || exit 1; ")
 	}
-	script.WriteString(strings.Join(quoted, " ") + "; rc=$?; ")
-	script.WriteString("COMPONENT=felix " + shq(s.CalicoDir+"/.semaphore/collect-artifacts") + "; exit $rc")
+	// A timed-out job is killed; its partial reports show where it hung.
+	script.WriteString("collect() { COMPONENT=felix " + shq(s.CalicoDir+"/.semaphore/collect-artifacts") + "; }; ")
+	script.WriteString("trap 'collect; exit 143' TERM; ")
+	script.WriteString(strings.Join(quoted, " ") + "; rc=$?; trap - TERM; collect; exit $rc")
 	return []string{"bash", "-c", script.String()}
 }
 
@@ -262,7 +264,7 @@ func runCmd(args []string) (int, error) {
 	deadline := fs.String("deadline", "", "RFC 3339 time after which no job starts that can't finish")
 	artifacts := fs.String("artifacts", "artifacts", "output directory")
 	labels := fs.String("labels", "", "VM labels, k=v,k=v")
-	sshKey := fs.String("ssh-key", filepath.Join(os.Getenv("HOME"), ".ssh", "id_rsa"), "private key whose public half the VMs accept, or a .pub file")
+	sshKey := fs.String("ssh-key", filepath.Join(os.Getenv("HOME"), ".ssh", "id_rsa"), "private key (or its .pub) the VMs accept; the setup and clean scripts' ssh must offer it too")
 	serviceAccount := fs.String("service-account", "semaphore-v2-gcr@unique-caldron-775.iam.gserviceaccount.com", "VM service account")
 	project := fs.String("project", envOr("GOOGLE_PROJECT", "unique-caldron-775"), "GCP project")
 	diskGB := fs.Int64("disk-size-gb", 20, "boot disk size")
@@ -310,7 +312,7 @@ func runCmd(args []string) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("GCE client: %w", err)
 	}
-	remote := sshRemote{runTimeout: 2 * time.Minute}
+	remote := sshRemote{runTimeout: 2 * time.Minute, identity: strings.TrimSuffix(*sshKey, ".pub")}
 	hooks := scriptHooks{setup: *setup, clean: *clean, setupTimeout: 20 * time.Minute, cleanTimeout: 5 * time.Minute}
 	r := NewRunner(cfg, cloud, sshResults{remote: remote}, hooks, artifactMemo{})
 

@@ -16,6 +16,7 @@ package main
 
 import (
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -54,6 +55,9 @@ func logVerdict(log []byte, want int) Outcome {
 		}
 	}
 	if len(verdicts) < want {
+		if slices.Contains(verdicts, OutcomeFail) {
+			return OutcomeFail
+		}
 		return ""
 	}
 	for _, v := range verdicts[len(verdicts)-want:] {

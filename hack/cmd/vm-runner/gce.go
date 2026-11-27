@@ -184,6 +184,8 @@ func classifyRejection(err error) error {
 		case ge.Code == http.StatusServiceUnavailable || strings.Contains(reasons, "insufficientCapacity") ||
 			strings.Contains(ge.Message, "does not currently have sufficient capacity"):
 			code = "REGION_INSUFFICIENT_CAPACITY"
+		case ge.Code == http.StatusTooManyRequests || ge.Code >= 500 || strings.Contains(reasons, "ateLimitExceeded"):
+			code = "API_TRANSIENT"
 		}
 	}
 	return &CreateError{Codes: []string{code}, Capacity: code != "REQUEST_REJECTED", Err: err}
@@ -262,9 +264,6 @@ func (g *gceCloud) list(ctx context.Context, filter string) ([]VM, error) {
 		Pages(ctx, func(l *compute.InstanceAggregatedList) error {
 			for _, scoped := range l.Items {
 				for _, inst := range scoped.Instances {
-					if inst.Status == "STOPPING" || inst.Status == "TERMINATED" {
-						continue
-					}
 					vms = append(vms, vmFromInstance(inst))
 				}
 			}

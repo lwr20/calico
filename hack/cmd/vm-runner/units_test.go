@@ -275,9 +275,32 @@ func TestSSHResultsKillAndRestart(t *testing.T) {
 	if err := s.Kill(ctx, vm, run); err != nil {
 		t.Fatal(err)
 	}
-	// The whole group dies, wrapper included, so no rc is written.
-	if st := waitDone(t, s, vm, run); st.State != Gone {
-		t.Errorf("killed job %+v, want gone", st)
+	// The wrapper survives the TERM to the group and records the job's death.
+	if st := waitDone(t, s, vm, run); st.State != Done || st.RC != 143 {
+		t.Errorf("killed job %+v, want done 143", st)
+	}
+}
+
+func TestSSHResultsKilledJobsTrapWritesOutputs(t *testing.T) {
+	home := t.TempDir()
+	s := sshResults{remote: localRemote{home: home}}
+	ctx := context.Background()
+	run := JobRun{Job: Job{ID: "4", Outputs: []string{"out"}, Command: []string{"bash", "-c",
+		"trap 'mkdir -p out; echo partial > out/r.xml; exit 143' TERM; sleep 300 & wait"}}, Attempt: 1}
+	if err := s.Start(ctx, VM{}, run); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(200 * time.Millisecond)
+	if err := s.Kill(ctx, VM{}, run); err != nil {
+		t.Fatal(err)
+	}
+	waitDone(t, s, VM{}, run)
+	dir := filepath.Join(t.TempDir(), "4")
+	if err := s.Fetch(ctx, VM{}, run, dir); err != nil {
+		t.Fatal(err)
+	}
+	if !exists(filepath.Join(dir, "r.xml")) {
+		t.Error("the killed job's trap output was not fetched")
 	}
 }
 
@@ -312,7 +335,7 @@ func TestFelixJobs(t *testing.T) {
 	}
 	script := fv.Command[2]
 	for _, want := range []string{"'FV_BATCHES_TO_RUN=2'", "'FV_NUM_BATCHES=3'", "'GINKGO_FOCUS=BPF'", "'FELIX_FV_NFTABLES=true'",
-		"rm -rf 'calico/felix/report'", "COMPONENT=felix 'calico/.semaphore/collect-artifacts'; exit $rc"} {
+		"rm -rf 'calico/felix/report'", "trap 'collect; exit 143' TERM", "rc=$?; trap - TERM; collect; exit $rc"} {
 		if !strings.Contains(script, want) {
 			t.Errorf("command %q lacks %q", script, want)
 		}

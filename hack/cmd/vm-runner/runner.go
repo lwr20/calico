@@ -96,7 +96,7 @@ func (c *Config) setDefaults() {
 	}
 }
 
-// Runner owns one lane's queue and pool.  Only the scheduler goroutine (run)
+// Runner owns one lane's queue and pool.  Only the scheduler goroutine (schedule)
 // touches the fields below the divider; workers and GCE operations talk to it
 // through events.
 type Runner struct {
@@ -361,10 +361,12 @@ func (r *Runner) onCreated(ctx context.Context, ev evCreated) {
 			}
 		}
 	}
-	if len(ev.vms) < ev.req.count && ev.req.forJob == nil {
-		// Back off general creates; every step of the order came up short.
-		r.capacityFailed = true
-		r.createBlockedTil = r.now().Add(r.cfg.CreateRetryInterval)
+	if ev.req.forJob == nil {
+		r.capacityFailed = len(ev.vms) < ev.req.count
+		if r.capacityFailed {
+			// Back off general creates; every step of the order came up short.
+			r.createBlockedTil = r.now().Add(r.cfg.CreateRetryInterval)
+		}
 	}
 	for _, vm := range ev.vms {
 		if r.stopping || len(r.queue) == 0 {
@@ -538,11 +540,15 @@ func (r *Runner) dispatch(ctx context.Context) {
 		if v.phase != phaseIdle || r.stopping || ctx.Err() != nil {
 			continue
 		}
-		for i, js := range r.queue {
+		order := r.queue
+		if fj := v.forJob; fj != nil && slices.Contains(r.queue, fj) && eligible(fj, v.vm) {
+			order = append([]*jobState{fj}, r.queue...)
+		}
+		for _, js := range order {
 			if !eligible(js, v.vm) {
 				continue
 			}
-			r.queue = slices.Delete(r.queue, i, i+1)
+			r.queue = slices.DeleteFunc(r.queue, func(q *jobState) bool { return q == js })
 			js.running = true
 			v.phase = phaseBusy
 			v.job = js

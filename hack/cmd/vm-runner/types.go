@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"regexp"
 	"slices"
 	"time"
 )
@@ -57,6 +58,8 @@ func readJobs(path string) ([]Job, error) {
 	return jobs, validateJobs(jobs)
 }
 
+var jobIDRE = regexp.MustCompile(`^[A-Za-z0-9_-][A-Za-z0-9_.-]*$`)
+
 func validateJobs(jobs []Job) error {
 	seen := map[string]bool{}
 	logNames := map[string]string{}
@@ -64,6 +67,8 @@ func validateJobs(jobs []Job) error {
 		switch {
 		case j.ID == "":
 			return fmt.Errorf("a job has no id")
+		case !jobIDRE.MatchString(j.ID):
+			return fmt.Errorf("job id %q: want letters, digits, '_', '-' or '.', not leading '.'", j.ID)
 		case seen[j.ID]:
 			return fmt.Errorf("job id %q appears twice", j.ID)
 		case len(j.Command) == 0:
