@@ -98,6 +98,6 @@ fi
 # Login using the VM's service account.
 "${ssh_cmd[@]}" 'gcloud auth configure-docker gcr.io --quiet'
 
-# The clean script between batches on a reused VM keeps /tmp entries older than
+# Cleaning between jobs on a reused VM keeps /tmp entries older than
 # this, the FV artifacts loaded above.
 "${ssh_cmd[@]}" 'sudo touch /var/tmp/vm-runner-setup-done'

@@ -37,7 +37,8 @@ type Cloud interface {
 	BulkCreate(ctx context.Context, req CreateReq) ([]VM, error)
 	Delete(ctx context.Context, vms ...VM) error
 	Get(ctx context.Context, vm VM) (State, error)
-	ListByPrefix(ctx context.Context, prefix string) ([]VM, error)
+	// ListPool lists the VMs named <prefix>-<n>.
+	ListPool(ctx context.Context, prefix string) ([]VM, error)
 	SerialOutput(ctx context.Context, vm VM) ([]byte, error)
 	// Preempted reports the first preemption of this VM at or after since.
 	Preempted(ctx context.Context, vm VM, since time.Time) (at time.Time, ok bool, err error)

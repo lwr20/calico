@@ -19,14 +19,13 @@ import (
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 )
 
-// artifactsLayout names the files today's consumers read.
+// artifactsLayout names the files the FV epilogue and report publishers read.
 type artifactsLayout struct {
 	dir string
 }
@@ -140,7 +139,7 @@ func writeJSON(path string, v any) error {
 	return os.WriteFile(path, append(data, '\n'), 0o644)
 }
 
-// preemptLines are today's FV-PREEMPT lines, one per lost attempt.
+// preemptLines are the FV-PREEMPT lines log mining reads, one per lost attempt.
 func preemptLines(run, lane string, jobs []JobRecord) []string {
 	var lines []string
 	for _, j := range jobs {
@@ -232,17 +231,4 @@ func appendFile(path string, data []byte) error {
 		err = cerr
 	}
 	return err
-}
-
-func readTail(path string, n int64) []byte {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil
-	}
-	defer f.Close()
-	if st, err := f.Stat(); err == nil && st.Size() > n {
-		_, _ = f.Seek(st.Size()-n, io.SeekStart)
-	}
-	data, _ := io.ReadAll(f)
-	return data
 }

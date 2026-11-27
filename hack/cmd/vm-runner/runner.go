@@ -125,6 +125,7 @@ type Runner struct {
 	setupFailStreak  int
 	createBlockedTil time.Time
 	capacityFailed   bool
+	createRejected   error
 	stopping         bool
 }
 
@@ -157,6 +158,8 @@ type vmState struct {
 	vm    VM
 	phase vmPhase
 	reply chan *assignment
+	// forJob is the job this VM was created for, if any.
+	forJob *jobState
 }
 
 // assignment is what a worker gets: a copy, so it never shares jobState.
@@ -180,6 +183,9 @@ type event interface{}
 type evCreated struct {
 	req createRequest
 	vms []VM
+	// rejected is set when every step refused the create for a reason other
+	// than capacity, such as a bad image or service account.
+	rejected error
 }
 
 type evSetup struct {
@@ -239,11 +245,10 @@ func (r *Runner) Run(ctx context.Context, jobs []Job) ([]JobRecord, error) {
 		r.queue = append(r.queue, js)
 	}
 
-	// An Argo step retry finds the previous attempt's VMs under the same
-	// prefix; the separator stops prefix "fv-1" matching "fv-10".
-	stale, err := r.cloud.ListByPrefix(ctx, r.cfg.Prefix+"-")
+	// A retried CI step finds the previous attempt's VMs under the same names.
+	stale, err := r.cloud.ListPool(ctx, r.cfg.Prefix)
 	if err != nil {
-		return nil, fmt.Errorf("listing VMs with prefix %s-: %w", r.cfg.Prefix, err)
+		return nil, fmt.Errorf("listing VMs named %s-<n>: %w", r.cfg.Prefix, err)
 	}
 	if len(stale) > 0 {
 		r.logf("Deleting %d VMs left by an earlier attempt of this step.", len(stale))
@@ -330,6 +335,10 @@ func (r *Runner) onCreated(ctx context.Context, ev evCreated) {
 	r.creating--
 	r.pendingTotal -= ev.req.count
 	r.pendingOnDemand -= ev.req.odAllowance
+	if ev.rejected != nil && r.createRejected == nil {
+		r.logf("GCE rejected every create, not for capacity; creating no more VMs: %v", ev.rejected)
+		r.createRejected = ev.rejected
+	}
 	if js := ev.req.forJob; js != nil {
 		js.createPending = false
 		if len(ev.vms) == 0 {
@@ -351,7 +360,7 @@ func (r *Runner) onCreated(ctx context.Context, ev evCreated) {
 			r.deleteVM(vm)
 			continue
 		}
-		v := &vmState{vm: vm, phase: phaseSetup}
+		v := &vmState{vm: vm, phase: phaseSetup, forJob: ev.req.forJob}
 		r.vms[vm.Name] = v
 		r.workers.Add(1)
 		go r.worker(ctx, vm)
@@ -362,6 +371,10 @@ func (r *Runner) onSetup(ev evSetup) {
 	if ev.ok {
 		r.setupFailStreak = 0
 		return
+	}
+	// The general target's shrink below doesn't bound a job's own creates.
+	if v := r.vms[ev.vm.Name]; v != nil && v.forJob != nil {
+		v.forJob.retryCreateAfter = r.now().Add(r.cfg.CreateRetryInterval)
 	}
 	r.setupFailStreak++
 	if r.setupFailStreak >= setupFailuresToShrink && r.target > 0 {
@@ -486,6 +499,10 @@ func (r *Runner) dispatch(ctx context.Context) {
 			r.finish(js, OutcomeNotRun, "runner stopped")
 			continue
 		}
+		if r.createRejected != nil && len(r.vms) == 0 && r.creating == 0 {
+			r.finish(js, OutcomeNotRun, "VM creation rejected: "+r.createRejected.Error())
+			continue
+		}
 		if !r.fits(js, now) {
 			reason := "lane deadline"
 			if len(r.vms) == 0 && r.capacityFailed {
@@ -521,7 +538,7 @@ func (r *Runner) dispatch(ctx context.Context) {
 		}
 	}
 
-	if !r.stopping {
+	if !r.stopping && r.createRejected == nil {
 		r.provision(ctx)
 	}
 	r.retireIdle()
@@ -627,8 +644,8 @@ func (r *Runner) startCreate(ctx context.Context, req createRequest) {
 	r.pendingTotal += req.count
 	r.pendingOnDemand += req.odAllowance
 	go func() {
-		vms := r.create(ctx, req)
-		r.events <- evCreated{req: req, vms: vms}
+		vms, rejected := r.create(ctx, req)
+		r.events <- evCreated{req: req, vms: vms, rejected: rejected}
 	}()
 }
 
@@ -706,7 +723,7 @@ func (r *Runner) sweep() {
 	r.deletes.Wait()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	left, err := r.cloud.ListByPrefix(ctx, r.cfg.Prefix+"-")
+	left, err := r.cloud.ListPool(ctx, r.cfg.Prefix)
 	if err != nil {
 		r.logf("WARNING: could not list VMs for the final sweep: %v", err)
 		return
@@ -735,15 +752,19 @@ func (r *Runner) newNames(n int) []string {
 	return names
 }
 
-// create walks the provisioning order for req, keeping partial results.
-func (r *Runner) create(ctx context.Context, req createRequest) []VM {
+// create walks the provisioning order for req, keeping partial results.  A
+// rejection other than capacity moves on too, since it may be one region's or
+// one type's; only when every step was rejected that way is it returned.
+func (r *Runner) create(ctx context.Context, req createRequest) ([]VM, error) {
 	order := provisioningOrder(r.cfg.Profile, r.cfg.Regions, req.types, req.onDemandOnly)
 	var got []VM
+	var rejected error
+	sawCapacity := false
 	remaining, odLeft := req.count, req.odAllowance
 	for _, st := range order {
 		for _, t := range st.Types {
 			if remaining == 0 || ctx.Err() != nil {
-				return got
+				return got, nil
 			}
 			n := remaining
 			if st.Model == Standard {
@@ -756,6 +777,11 @@ func (r *Runner) create(ctx context.Context, req createRequest) []VM {
 			kind := map[Model]string{Spot: "spot", Standard: "on-demand"}[st.Model]
 			if err != nil {
 				r.logf("Create %d × %s %s in %s: %v", n, t, kind, st.Region, err)
+				if isCapacityError(err) {
+					sawCapacity = true
+				} else {
+					rejected = err
+				}
 			} else {
 				r.logf("Created %d of %d × %s %s in %s.", len(vms), n, t, kind, st.Region)
 			}
@@ -769,5 +795,8 @@ func (r *Runner) create(ctx context.Context, req createRequest) []VM {
 	if remaining > 0 {
 		r.logf("Every step of the provisioning order fell short: %d of %d VMs created.", req.count-remaining, req.count)
 	}
-	return got
+	if len(got) > 0 || sawCapacity || ctx.Err() != nil {
+		return got, nil
+	}
+	return got, rejected
 }

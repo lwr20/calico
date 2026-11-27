@@ -22,40 +22,49 @@ import (
 var (
 	ansiRE = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
 	// gotestsum's last line: "DONE <n> tests[, <s> skipped][, <f> failures] in <d>s".
-	gotestsumDoneRE   = regexp.MustCompile(`^DONE [0-9]+ tests`)
-	gotestsumFailedRE = regexp.MustCompile(`, [0-9]+ (failures|errors)`)
+	gotestsumDoneRE = regexp.MustCompile(`^DONE [0-9]+ tests`)
+	// gotestsum drops the plural for a count of one.
+	gotestsumFailedRE = regexp.MustCompile(`, [0-9]+ (failures?|errors?)`)
 )
 
-// logVerdict reads a finished run's verdict from the end of its log: Ginkgo's
-// final "SUCCESS!"/"FAIL!" line or gotestsum's "DONE <n> tests" line.  Returns
-// "" when neither is there.  Anchored to those end-of-run lines so a mid-run
-// PASS can't be taken for completion.
-func logVerdict(log []byte) Outcome {
-	lines := strings.Split(ansiRE.ReplaceAllString(string(log), ""), "\n")
-	if len(lines) > 300 {
-		lines = lines[len(lines)-300:]
+// logVerdict reads a finished run's verdict from its log: Ginkgo's final
+// "SUCCESS!"/"FAIL!" line or gotestsum's "DONE <n> tests" line.  A job whose
+// command runs several suites prints one per suite, so it is finished only once
+// want of them are there; until then, and when there are none, it returns "".
+// Anchored to those end-of-run lines so a mid-run PASS can't be taken for
+// completion.
+func logVerdict(log []byte, want int) Outcome {
+	if want < 1 {
+		want = 1
 	}
-	var verdict Outcome
-	for _, l := range lines {
+	var verdicts []Outcome
+	for _, l := range strings.Split(ansiRE.ReplaceAllString(string(log), ""), "\n") {
 		l = strings.TrimRight(l, "\r")
 		switch {
 		case strings.HasPrefix(l, "FAIL!"):
-			verdict = OutcomeFail
+			verdicts = append(verdicts, OutcomeFail)
 		case strings.HasPrefix(l, "SUCCESS!"):
-			verdict = OutcomePass
+			verdicts = append(verdicts, OutcomePass)
 		case gotestsumDoneRE.MatchString(l):
 			if gotestsumFailedRE.MatchString(l) {
-				verdict = OutcomeFail
+				verdicts = append(verdicts, OutcomeFail)
 			} else {
-				verdict = OutcomePass
+				verdicts = append(verdicts, OutcomePass)
 			}
 		}
 	}
-	return verdict
+	if len(verdicts) < want {
+		return ""
+	}
+	for _, v := range verdicts[len(verdicts)-want:] {
+		if v == OutcomeFail {
+			return OutcomeFail
+		}
+	}
+	return OutcomePass
 }
 
-// monitorRE picks the log lines worth echoing to the step log, as today's
-// tail filter does.
+// monitorRE picks the log lines worth echoing to the step log.
 var monitorRE = regexp.MustCompile(strings.Join([]string{
 	`Failure`, `SUCCESS`, `PASSED`, `Parallel test node`, `Test batch`,
 	`FV-TEST-START`, `^test.*\.\.\. ok`, `\.\.\. ERROR$`, `Failure output:`,

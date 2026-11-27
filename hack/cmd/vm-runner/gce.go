@@ -90,8 +90,19 @@ func (g *gceCloud) BulkCreate(ctx context.Context, req CreateReq) ([]VM, error) 
 	opErr := g.waitRegionOp(ctx, req.Region, op)
 
 	// Even a failed or partial insert can leave VMs behind; every one found
-	// is returned so the pool uses or deletes it.
-	vms, listErr := g.findByNames(ctx, req.Region, req.Names)
+	// is used or deleted.
+	found, listErr := g.findByNames(ctx, req.Region, req.Names)
+	var vms, noIP []VM
+	for _, vm := range found {
+		if vm.IP == "" {
+			noIP = append(noIP, vm)
+		} else {
+			vms = append(vms, vm)
+		}
+	}
+	if len(noIP) > 0 {
+		_ = g.Delete(ctx, noIP...)
+	}
 	if listErr != nil && len(vms) == 0 {
 		return nil, &CreateError{Codes: []string{"LIST_FAILED"}, Capacity: true, Err: listErr}
 	}
@@ -183,7 +194,7 @@ func (g *gceCloud) waitRegionOp(ctx context.Context, region string, op *compute.
 	deadline := time.Now().Add(10 * time.Minute)
 	for op.Status != "DONE" {
 		if time.Now().After(deadline) {
-			return &CreateError{Codes: []string{"OPERATION_TIMEOUT"}, Err: fmt.Errorf("operation %s not done after 10 minutes", op.Name)}
+			return &CreateError{Codes: []string{"OPERATION_TIMEOUT"}, Capacity: true, Err: fmt.Errorf("operation %s not done after 10 minutes", op.Name)}
 		}
 		next, err := g.svc.RegionOperations.Wait(g.project, region, op.Name).Context(ctx).Do()
 		if err != nil {
@@ -232,7 +243,7 @@ func (g *gceCloud) findByNames(ctx context.Context, region string, names []strin
 	}
 	// A VM can report RUNNING a moment before its external IP shows.
 	for i := range out {
-		for try := 0; out[i].IP == "" && try < 6; try++ {
+		for try := 0; out[i].IP == "" && try < 36; try++ {
 			if !sleepCtx(ctx, 5*time.Second) {
 				break
 			}
@@ -337,8 +348,10 @@ func (g *gceCloud) Get(ctx context.Context, vm VM) (State, error) {
 	return StateStopped, nil
 }
 
-func (g *gceCloud) ListByPrefix(ctx context.Context, prefix string) ([]VM, error) {
-	return g.list(ctx, fmt.Sprintf(`name eq "%s.*"`, regexp.QuoteMeta(prefix)))
+// ListPool matches the whole name so that neither "fv-10-1" nor another
+// lane's "fv-1-bpf-1" counts as one of prefix "fv-1"'s VMs.
+func (g *gceCloud) ListPool(ctx context.Context, prefix string) ([]VM, error) {
+	return g.list(ctx, fmt.Sprintf(`name eq "%s-[0-9]+"`, regexp.QuoteMeta(prefix)))
 }
 
 func (g *gceCloud) SerialOutput(ctx context.Context, vm VM) ([]byte, error) {

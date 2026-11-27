@@ -36,6 +36,9 @@ type Job struct {
 	// MemoLogVerdict lets a pass read from the log, without fetched reports,
 	// be memoised.
 	MemoLogVerdict bool `json:"memoLogVerdict,omitempty"`
+	// LogSummaries is how many end-of-run summary lines a finished run
+	// prints, one per test suite it runs; default 1.
+	LogSummaries int `json:"logSummaries,omitempty"`
 }
 
 func (j Job) Timeout() time.Duration {
@@ -143,7 +146,7 @@ type JobRecord struct {
 	Attempts []Attempt `json:"attempts"`
 }
 
-// jobIDForLog is the NNN of today's log names: a zero-padded number, or the id
+// jobIDForLog is the NNN of test-NNN.log: a zero-padded number, or the id
 // itself.
 func jobIDForLog(id string) string {
 	var n int

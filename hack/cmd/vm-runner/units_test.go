@@ -40,12 +40,30 @@ func TestLogVerdict(t *testing.T) {
 		{"coloured", "\x1b[1m\x1b[32mSUCCESS!\x1b[0m -- 3 Passed\n", OutcomePass},
 		{"gotestsum pass", "DONE 812 tests, 3 skipped in 1020.4s\n", OutcomePass},
 		{"gotestsum fail", "DONE 812 tests, 2 failures in 1020.4s\n", OutcomeFail},
-		{"gotestsum errors", "DONE 812 tests, 1 errors in 1020.4s\n", OutcomeFail},
+		{"gotestsum one failure", "DONE 812 tests, 1 failure in 1020.4s\n", OutcomeFail},
+		{"gotestsum one error", "DONE 812 tests, 1 error in 1020.4s\n", OutcomeFail},
 		{"last summary wins", "SUCCESS! -- 1 Passed\nFAIL! -- 0 Passed | 1 Failed\n", OutcomeFail},
 		{"mid-run PASS is not a verdict", "--- PASS: TestFoo (0.1s)\nPASS\nok  felix/calc\n", ""},
 		{"nothing", "building...\n", ""},
 	} {
-		if got := logVerdict([]byte(tc.log)); got != tc.want {
+		if got := logVerdict([]byte(tc.log), 1); got != tc.want {
+			t.Errorf("%s: got %q, want %q", tc.name, got, tc.want)
+		}
+	}
+
+	// A command running two suites is finished only after both summaries,
+	// however far apart they are.
+	first := "DONE 40 tests in 12.0s\n" + strings.Repeat("PASS bpf/ut.TestX\n", 5000)
+	for _, tc := range []struct {
+		name, log string
+		want      Outcome
+	}{
+		{"first suite only", first, ""},
+		{"both passed", first + "DONE 2000 tests in 900.0s\n", OutcomePass},
+		{"second failed", first + "DONE 2000 tests, 1 failure in 900.0s\n", OutcomeFail},
+		{"first failed", "DONE 40 tests, 2 failures in 12.0s\nDONE 2000 tests in 900.0s\n", OutcomeFail},
+	} {
+		if got := logVerdict([]byte(tc.log), 2); got != tc.want {
 			t.Errorf("%s: got %q, want %q", tc.name, got, tc.want)
 		}
 	}

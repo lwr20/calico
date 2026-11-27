@@ -58,8 +58,8 @@ func main() {
 	os.Exit(code)
 }
 
-// felixJobsCmd writes the jobs file for one Felix FV lane, reading the
-// settings batches.sh reads from the environment.
+// felixJobsCmd writes the jobs file for one Felix FV lane from the lane's
+// FV_* and FELIX_FV_* environment.
 func felixJobsCmd(args []string) error {
 	fs := flag.NewFlagSet("felix-jobs", flag.ContinueOnError)
 	batches := fs.Int("batches", 0, "number of FV batches")
@@ -136,8 +136,8 @@ const (
 	fvTimeoutMinutes = 25
 )
 
-// felixJobs builds the same make commands as batches.sh.  The ut job goes
-// first: it can't be split, so it is the lane's long pole.
+// felixJobs puts the ut job first: it can't be split, so it is the lane's
+// long pole.
 func felixJobs(s felixSettings, batches int, ut bool, utTypes []string, memoPrefix string) []Job {
 	var jobs []Job
 	memoKey := func(id string) string {
@@ -157,6 +157,8 @@ func felixJobs(s felixSettings, batches int, ut bool, utTypes []string, memoPref
 			// The ut VM often wedges after passing; its log is then all
 			// there is.
 			MemoLogVerdict: true,
+			// bpf.test then bpf_ut.test, each under gotestsum.
+			LogSummaries: 2,
 		})
 	}
 	for b := 1; b <= batches; b++ {
@@ -184,7 +186,7 @@ func felixJobs(s felixSettings, batches int, ut bool, utTypes []string, memoPref
 }
 
 // felixCommand wraps make so the reports land in <calico>/artifacts, the
-// layout today's per-batch collection produces, whatever make returns.
+// layout the FV report publishers and the memo expect, whatever make returns.
 func felixCommand(s felixSettings, makeArgv []string) []string {
 	quoted := make([]string, len(makeArgv))
 	for i, a := range makeArgv {
@@ -260,14 +262,14 @@ func runCmd(args []string) (int, error) {
 	deadline := fs.String("deadline", "", "RFC 3339 time after which no job starts that can't finish")
 	artifacts := fs.String("artifacts", "artifacts", "output directory")
 	labels := fs.String("labels", "", "VM labels, k=v,k=v")
-	sshKey := fs.String("ssh-key", filepath.Join(os.Getenv("HOME"), ".ssh", "id_rsa.pub"), "public key the VMs accept")
+	sshKey := fs.String("ssh-key", filepath.Join(os.Getenv("HOME"), ".ssh", "id_rsa"), "private key whose public half the VMs accept, or a .pub file")
 	serviceAccount := fs.String("service-account", "semaphore-v2-gcr@unique-caldron-775.iam.gserviceaccount.com", "VM service account")
 	project := fs.String("project", envOr("GOOGLE_PROJECT", "unique-caldron-775"), "GCP project")
 	diskGB := fs.Int64("disk-size-gb", 20, "boot disk size")
 	maxRun := fs.Duration("max-run-duration", 4*time.Hour, "GCE deletes a VM after this, so a dead runner can't leak it")
 	scores := fs.String("capacity-scores", "", "spot capacity scores recorded before the run")
 	simulate := fs.String("simulate-preempt", "", "job ids whose first spot attempt GCE is asked to preempt")
-	runID := fs.String("run-id", envOr("CI_WORKFLOW_NAME", "local"), "run id for FV-PREEMPT lines")
+	runID := fs.String("run-id", envOr("CI_WORKFLOW_NAME", envOr("SEMAPHORE_WORKFLOW_ID", "local")), "run id for FV-PREEMPT lines")
 	laneID := fs.String("lane-id", "", "lane id for FV-PREEMPT lines")
 	if err := fs.Parse(args); err != nil {
 		return 0, err
@@ -403,12 +405,25 @@ func buildConfig(f runFlags) (Config, gceSpec, error) {
 		}
 		spec.StartupScript = string(data)
 	}
-	key, err := os.ReadFile(f.sshKey)
+	key, err := publicKey(f.sshKey)
 	if err != nil {
 		return Config{}, zero, fmt.Errorf("--ssh-key: %w", err)
 	}
 	spec.SSHPublicKey = string(key)
 	return cfg, spec, nil
+}
+
+// publicKey reads a .pub file, or derives the public key from a private one:
+// CI agents often hold only the private key.
+func publicKey(path string) ([]byte, error) {
+	if strings.HasSuffix(path, ".pub") {
+		return os.ReadFile(path)
+	}
+	out, err := exec.Command("ssh-keygen", "-y", "-f", path).Output()
+	if err != nil {
+		return nil, fmt.Errorf("ssh-keygen -y -f %s: %w", path, err)
+	}
+	return out, nil
 }
 
 // labelValue fits s to GCE's label rules: lowercase, digits, - and _.

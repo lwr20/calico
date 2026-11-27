@@ -48,6 +48,20 @@ func (r *Runner) worker(ctx context.Context, vm VM) {
 		select {
 		case a = <-reply:
 		case <-ctx.Done():
+			// The scheduler may have assigned a job as the context ended; it
+			// waits for that job's result, so report it unrun.
+			select {
+			case a = <-reply:
+			default:
+			}
+			if a != nil {
+				now := r.now()
+				r.events <- evJobDone{vm: vm.Name, job: a.job.ID, attempt: Attempt{
+					VM: vm.Name, Region: vm.Region, Zone: vm.Zone, Model: vm.Model, MachineType: vm.Type,
+					Start: now, End: now, Outcome: OutcomeNotRun, Reason: "runner stopped",
+				}}
+			}
+			return
 		}
 		if a == nil {
 			return
@@ -223,7 +237,8 @@ func (r *Runner) checkLoss(ctx context.Context, ar *attemptRun, wedgeOK bool) (O
 	if !lost && !wedgeOK {
 		return "", "", false
 	}
-	verdict := logVerdict(readTail(ar.logPath, 64<<10))
+	log, _ := os.ReadFile(ar.logPath)
+	verdict := logVerdict(log, ar.run.Job.LogSummaries)
 	if verdict != "" {
 		return r.verdictFromLog(ctx, ar, verdict, lost, why)
 	}
@@ -300,7 +315,7 @@ func (r *Runner) captureSerial(ctx context.Context, ar *attemptRun) {
 }
 
 // remember stores a passed job's reports under its memo key, in the layout
-// today's batch memo restores.  A failed store is only a warning.
+// the batch memo restores.  A failed store is only a warning.
 func (r *Runner) remember(ctx context.Context, ar *attemptRun, fromLog bool) {
 	job := ar.run.Job
 	if job.MemoKey == "" || r.memo == nil || !hasReports(r.layout.reportDir(job.ID)) {

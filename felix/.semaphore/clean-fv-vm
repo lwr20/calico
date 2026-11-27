@@ -35,7 +35,7 @@ containers="$(docker ps -aq)"
 docker network prune -f >/dev/null
 sudo find /tmp -mindepth 1 -maxdepth 1 -newer /var/tmp/vm-runner-setup-done \
   ! -name "systemd-private-*" ! -name "snap-private-tmp" ! -name "ssh-*" -exec rm -rf {} +
-rm -rf "$calico_dir/felix/fv/cwlogs"
+rm -rf "$calico_dir/felix/fv/cwlogs" "$calico_dir/felix/fv/data-races.log" "$calico_dir/felix/fv/latency.log"
 mkdir -p "$calico_dir/felix/fv/cwlogs"
 left="$(docker ps -aq | wc -l)"
 if [ "$left" -ne 0 ]; then

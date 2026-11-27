@@ -52,8 +52,8 @@ func TestAllPassReusesVMs(t *testing.T) {
 	if !exists(filepath.Join(h.cfg.Artifacts, "configure-vm-1.log")) {
 		t.Error("no configure-vm-1.log")
 	}
-	if len(h.cloud.listed) == 0 || h.cloud.listed[0] != "fv-1-" {
-		t.Errorf("start-of-run sweep listed %v, want prefix fv-1-", h.cloud.listed)
+	if len(h.cloud.listed) == 0 || h.cloud.listed[0] != "fv-1" {
+		t.Errorf("start-of-run sweep listed %v, want pool fv-1", h.cloud.listed)
 	}
 }
 
@@ -61,12 +61,16 @@ func TestStaleVMsFromAnEarlierAttemptAreDeleted(t *testing.T) {
 	h := newHarness(t, 1)
 	h.cloud.vms["fv-1-7"] = VM{Name: "fv-1-7", ID: 99}
 	h.cloud.vms["fv-10-1"] = VM{Name: "fv-10-1", ID: 98}
+	h.cloud.vms["fv-1-bpf-1"] = VM{Name: "fv-1-bpf-1", ID: 97}
 	h.run(fvJobs(1))
 	if h.cloud.alive("fv-1-7") {
 		t.Error("stale VM fv-1-7 not deleted")
 	}
 	if !h.cloud.alive("fv-10-1") {
 		t.Error("another lane's VM fv-10-1 was deleted")
+	}
+	if !h.cloud.alive("fv-1-bpf-1") {
+		t.Error("another lane's VM fv-1-bpf-1 was deleted")
 	}
 }
 

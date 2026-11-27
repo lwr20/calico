@@ -21,7 +21,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
+	"regexp"
 	"sync"
 	"testing"
 	"time"
@@ -88,13 +88,14 @@ func (c *fakeCloud) Get(_ context.Context, vm VM) (State, error) {
 	return StateNotFound, nil
 }
 
-func (c *fakeCloud) ListByPrefix(_ context.Context, prefix string) ([]VM, error) {
+func (c *fakeCloud) ListPool(_ context.Context, prefix string) ([]VM, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.listed = append(c.listed, prefix)
+	re := regexp.MustCompile("^" + regexp.QuoteMeta(prefix) + "-[0-9]+$")
 	var out []VM
 	for name, vm := range c.vms {
-		if strings.HasPrefix(name, prefix) {
+		if re.MatchString(name) {
 			out = append(out, vm)
 		}
 	}
@@ -401,7 +402,7 @@ func (h *harness) runCtx(ctx context.Context, jobs []Job) []JobRecord {
 	if ctx.Err() != nil && ctx.Err() == context.DeadlineExceeded {
 		h.t.Fatal("Run did not finish")
 	}
-	if left, _ := h.cloud.ListByPrefix(context.Background(), h.cfg.Prefix+"-"); len(left) != 0 {
+	if left, _ := h.cloud.ListPool(context.Background(), h.cfg.Prefix); len(left) != 0 {
 		h.t.Errorf("VMs left behind: %v", left)
 	}
 	return recs

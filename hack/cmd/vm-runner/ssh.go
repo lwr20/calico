@@ -27,8 +27,8 @@ import (
 	"time"
 )
 
-// sshOptions match .semaphore/vms/ssh-options; the setup script adds each
-// VM's host key to known_hosts.
+// sshOptions trust only known host keys: the setup script adds each VM's to
+// known_hosts.
 var sshOptions = []string{
 	"-o", "ServerAliveInterval=10",
 	"-o", "StrictHostKeyChecking=yes",
@@ -39,7 +39,7 @@ var sshOptions = []string{
 
 const sshUser = "ubuntu"
 
-// sshRemote forks ssh and scp, as today's scripts do.
+// sshRemote forks ssh and scp, so the setup and clean scripts share its keys and known_hosts.
 type sshRemote struct {
 	runTimeout time.Duration
 }
@@ -91,9 +91,9 @@ func (s sshResults) Start(ctx context.Context, vm VM, run JobRun) error {
 		quoted[i] = shq(a)
 	}
 	var b strings.Builder
-	// Start is retried when SSH fails, which can happen after the job began;
-	// a second copy must not start.
-	fmt.Fprintf(&b, `if [ -f %[1]s/pid ] && kill -0 "$(cat %[1]s/pid)" 2>/dev/null; then exit 0; fi; `, shq(d))
+	// Start is retried when SSH fails, which can happen after the job began
+	// or even finished; it must not run again.
+	fmt.Fprintf(&b, `if [ -e %s/pid ]; then exit 0; fi; `, shq(d))
 	fmt.Fprintf(&b, "set -e; rm -rf %s; mkdir -p %s; ", shq(d), shq(d))
 	// A reused VM still holds the previous job's outputs at the same paths.
 	for _, o := range run.Job.Outputs {
@@ -234,7 +234,7 @@ func runScript(ctx context.Context, script string, timeout time.Duration, vm VM,
 	return nil
 }
 
-// artifactMemo stores through ArgoCI's artifact CLI, as the batch memo does.
+// artifactMemo stores through the CI artifact cache CLI that restores the memo.
 type artifactMemo struct{}
 
 func (artifactMemo) Store(ctx context.Context, key, dir string, paths []string) error {
