@@ -25,7 +25,8 @@ import (
 	"time"
 )
 
-// artifactsLayout names the files the FV epilogue and report publishers read.
+// artifactsLayout's names and layout are a contract with the consumers of
+// the artifacts directory; don't rename them.
 type artifactsLayout struct {
 	dir string
 }

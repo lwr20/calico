@@ -34,6 +34,7 @@ const (
 	maxAttempts           = 3
 	lossesBeforeOnDemand  = 2
 	setupFailuresToShrink = 2
+	setupFailuresToGiveUp = 6
 )
 
 // Config is one lane's pool and timing settings.
@@ -117,11 +118,14 @@ type Runner struct {
 	deleting sync.Map
 
 	// Scheduler state.
-	start            time.Time
-	jobs             []*jobState
-	queue            []*jobState
-	vms              map[string]*vmState
-	pendingTotal     int
+	start        time.Time
+	jobs         []*jobState
+	queue        []*jobState
+	vms          map[string]*vmState
+	pendingTotal int
+	// setupFailsInARow counts failed setups since the last that worked.
+	setupFailsInARow int
+	setupEverOK      bool
 	pendingForJobs   int
 	pendingOnDemand  int
 	creating         int
@@ -408,6 +412,8 @@ func (r *Runner) onSetup(ev evSetup) {
 	}
 	if ev.ok {
 		r.setupFailStreak = 0
+		r.setupFailsInARow = 0
+		r.setupEverOK = true
 		// Failures are often passing (preempted while booting, a short outage).
 		if r.target < r.cfg.VMs {
 			r.target++
@@ -419,6 +425,15 @@ func (r *Runner) onSetup(ev evSetup) {
 		v.forJob.retryCreateAfter = r.now().Add(r.cfg.CreateRetryInterval)
 	}
 	r.setupFailStreak++
+	r.setupFailsInARow++
+	// Without a pause an always-failing setup would churn VMs until the deadline.
+	if r.setupFailsInARow >= setupFailuresToShrink {
+		r.createBlockedTil = r.now().Add(r.cfg.CreateRetryInterval)
+	}
+	if !r.setupEverOK && r.setupFailsInARow >= setupFailuresToGiveUp && r.createRejected == nil {
+		r.createRejected = fmt.Errorf("the first %d VM setups all failed; see the setup logs", r.setupFailsInARow)
+		r.logf("%v.", r.createRejected)
+	}
 	if r.setupFailStreak >= setupFailuresToShrink && r.target > 0 {
 		r.target--
 		r.setupFailStreak = 0

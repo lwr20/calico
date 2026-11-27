@@ -88,6 +88,12 @@ func (g *gceCloud) BulkCreate(ctx context.Context, req CreateReq) ([]VM, error) 
 		return nil, classifyRejection(err)
 	}
 	opErr := g.waitRegionOp(ctx, req.Region, op)
+	if ctx.Err() != nil {
+		// Nobody will use them; GCE accepts deleting VMs still provisioning.
+		dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), stopBudget)
+		defer cancel()
+		return nil, errors.Join(opErr, g.deleteByName(dctx, req.Region, req.Names))
+	}
 
 	// Even a failed or partial insert can leave VMs behind; every one found
 	// is used or deleted.
@@ -207,7 +213,7 @@ func (g *gceCloud) waitRegionOp(ctx context.Context, region string, op *compute.
 			if ctx.Err() != nil {
 				return &CreateError{Codes: []string{"CANCELLED"}, Err: err}
 			}
-			time.Sleep(5 * time.Second)
+			sleepCtx(ctx, 5*time.Second)
 			continue
 		}
 		op = next
@@ -243,6 +249,9 @@ func (g *gceCloud) findByNames(ctx context.Context, region string, names []strin
 		vms, err = g.list(ctx, fmt.Sprintf(`name eq "%s"`, strings.Join(quoted, "|")))
 		return err
 	})
+	if errors.Is(err, errUnreachable) && !strings.Contains(err.Error(), "zones/"+region+"-") {
+		err = nil
+	}
 	if err != nil {
 		return nil, err
 	}

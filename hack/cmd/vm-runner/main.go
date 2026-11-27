@@ -73,8 +73,8 @@ func felixJobsCmd(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if *batches <= 0 {
-		return errors.New("--batches must be positive")
+	if *batches < 0 || (*batches == 0 && !*ut) {
+		return errors.New("--batches must be positive, or zero with --ut")
 	}
 	jobs := felixJobs(felixEnv(), *batches, *ut, strings.Fields(*utTypes), *memoPrefix)
 
@@ -190,8 +190,8 @@ func felixJobs(s felixSettings, batches int, ut bool, utTypes []string, memoPref
 	return jobs
 }
 
-// felixCommand wraps make so the reports land in <calico>/artifacts, the
-// layout the FV report publishers and the memo expect, whatever make returns.
+// felixCommand wraps make so the reports land in <calico>/artifacts, where
+// they are published and memoised, whatever make returns.
 func felixCommand(s felixSettings, makeArgv []string) []string {
 	quoted := make([]string, len(makeArgv))
 	for i, a := range makeArgv {
@@ -314,6 +314,9 @@ func runCmd(args []string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	if *clean != "" && !isExecutable(*clean) {
+		return 0, fmt.Errorf("--clean %s is not an executable file", *clean)
+	}
 	jobs, err := readJobs(*jobsPath)
 	if err != nil {
 		return 0, err
@@ -382,6 +385,8 @@ func buildConfig(f runFlags) (Config, gceSpec, error) {
 		return Config{}, zero, errors.New("--image-family is required")
 	case f.setup == "":
 		return Config{}, zero, errors.New("--setup is required")
+	case !isExecutable(f.setup):
+		return Config{}, zero, fmt.Errorf("--setup %s is not an executable file", f.setup)
 	case f.startupScript == "":
 		// The setup script waits for the startup script to finish.
 		return Config{}, zero, errors.New("--startup-script is required")
@@ -489,4 +494,9 @@ func writeOutputs(cfg Config, recs []JobRecord, start, end time.Time, stdout *os
 		fmt.Fprintln(stdout, l)
 	}
 	return writeCapacityJSON(filepath.Join(cfg.Artifacts, "fv-capacity.json"), cfg.CapacityScores, cfg.RunID, cfg.LaneID, recs)
+}
+
+func isExecutable(path string) bool {
+	st, err := os.Stat(path)
+	return err == nil && st.Mode().IsRegular() && st.Mode()&0o111 != 0
 }

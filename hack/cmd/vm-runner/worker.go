@@ -158,8 +158,9 @@ func (r *Runner) execute(ctx context.Context, ar *attemptRun) (Outcome, string, 
 			r.pullLog(ctx, ar)
 			// A spot VM shutting down for preemption kills the job first.
 			if (st.State == Done && st.RC != 0) || st.State == Gone {
-				if at, ok := r.spotPreempted(ctx, ar); ok {
-					return OutcomePreempted, "preempted at " + at.UTC().Format(time.RFC3339), true
+				signalled := st.State == Gone || st.RC == 143 || st.RC == 137
+				if o, why, lost := r.spotLost(ctx, ar, signalled); lost {
+					return o, why, true
 				}
 			}
 			switch st.State {
@@ -183,7 +184,7 @@ func (r *Runner) execute(ctx context.Context, ar *attemptRun) (Outcome, string, 
 		}
 		if r.now().After(deadline) {
 			r.logf("%s timed out after %v on %s.", ar.prefix, run.Job.Timeout(), vm.Name)
-			r.stopJob(ar)
+			r.stopJob(ctx, ar)
 			r.awaitStopped(ctx, ar)
 			r.captureSerial(ctx, ar)
 			// Whatever reports exist show where it hung.
@@ -212,10 +213,18 @@ func (r *Runner) stopped(ctx context.Context, ar *attemptRun) (Outcome, string, 
 // stopBudget fits inside Kubernetes' default 30 s termination grace period.
 const stopBudget = 15 * time.Second
 
-func (r *Runner) stopJob(ar *attemptRun) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+// graceCtx outlives ctx's cancellation, but by no more than stopBudget: VMs
+// are deleted only once every worker is back.
+func graceCtx(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	gctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
+	stop := context.AfterFunc(ctx, func() { time.AfterFunc(stopBudget, cancel) })
+	return gctx, func() { stop(); cancel() }
+}
+
+func (r *Runner) stopJob(ctx context.Context, ar *attemptRun) {
+	kctx, cancel := graceCtx(ctx, 30*time.Second)
 	defer cancel()
-	_ = r.results.Kill(ctx, ar.vm, ar.run)
+	_ = r.results.Kill(kctx, ar.vm, ar.run)
 }
 
 // awaitStopped gives a killed job's traps time to write its outputs.
@@ -267,7 +276,7 @@ func (r *Runner) fetch(ctx context.Context, ar *attemptRun) error {
 	if d, ok := ctx.Deadline(); ok {
 		timeout = min(timeout, time.Until(d))
 	}
-	fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
+	fctx, cancel := graceCtx(ctx, timeout)
 	defer cancel()
 	return r.results.Fetch(fctx, ar.vm, ar.run, r.layout.jobDir(ar.run.Job.ID))
 }
@@ -333,18 +342,31 @@ func (r *Runner) verdictFromLog(ctx context.Context, ar *attemptRun, verdict Out
 	return verdict, "verdict from log: " + why, true
 }
 
-// spotPreempted reports a recorded preemption of a spot VM; an API error
-// counts as none.
-func (r *Runner) spotPreempted(ctx context.Context, ar *attemptRun) (time.Time, bool) {
+// spotLost says whether a spot VM's job ended because the VM is going away.
+// A job killed by a signal may be the first sign, before GCE lists the
+// preemption, so that case is checked a few times; an API error counts as
+// not lost.
+func (r *Runner) spotLost(ctx context.Context, ar *attemptRun, signalled bool) (Outcome, string, bool) {
 	if ar.vm.Model != Spot {
-		return time.Time{}, false
+		return "", "", false
 	}
-	at, ok, err := r.preempted(ctx, ar)
-	if err != nil || !ok {
-		return time.Time{}, false
+	tries := 1
+	if signalled {
+		tries = r.cfg.PreemptCheckRetries
 	}
-	ar.att.PreemptedAt = &at
-	return at, true
+	for i := 0; i < tries; i++ {
+		if i > 0 && !sleepCtx(ctx, r.cfg.PreemptCheckInterval) {
+			break
+		}
+		if at, ok, err := r.cloud.Preempted(ctx, ar.vm, ar.vm.Created); err == nil && ok {
+			ar.att.PreemptedAt = &at
+			return OutcomePreempted, "preempted at " + at.UTC().Format(time.RFC3339), true
+		}
+		if state, err := r.cloud.Get(ctx, ar.vm); err == nil && state != StateRunning {
+			return OutcomeVMLost, "VM " + strings.ToLower(string(state)), true
+		}
+	}
+	return "", "", false
 }
 
 // preempted asks GCE, retrying an API error.
@@ -383,7 +405,7 @@ func (r *Runner) pullLog(ctx context.Context, ar *attemptRun) error {
 }
 
 func (r *Runner) captureSerial(ctx context.Context, ar *attemptRun) {
-	sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
+	sctx, cancel := graceCtx(ctx, time.Minute)
 	defer cancel()
 	out, err := r.cloud.SerialOutput(sctx, ar.vm)
 	if err != nil {

@@ -267,8 +267,8 @@ func TestMaxRunCoversTheDeadline(t *testing.T) {
 	key := filepath.Join(t.TempDir(), "id.pub")
 	_ = os.WriteFile(key, []byte("ssh-rsa AAAA test\n"), 0o644)
 	startup := filepath.Join(t.TempDir(), "startup.sh")
-	_ = os.WriteFile(startup, []byte("#!/bin/bash\n"), 0o644)
-	f := runFlags{startupScript: startup, prefix: "fv", vms: 1, arch: "amd64", imageFamily: "i", setup: "s",
+	_ = os.WriteFile(startup, []byte("#!/bin/bash\n"), 0o755)
+	f := runFlags{startupScript: startup, prefix: "fv", vms: 1, arch: "amd64", imageFamily: "i", setup: startup,
 		regions: "us-central1", deadline: time.Now().Add(6 * time.Hour).UTC().Format(time.RFC3339),
 		odTypes: "n2-standard-4", spotTypes: "n2-standard-4", sshKey: key, model: Spot, maxRun: 4 * time.Hour}
 	_, spec, err := buildConfig(f)
@@ -337,5 +337,52 @@ func TestJobThatFinishedAsTheRunnerStoppedKeepsItsResult(t *testing.T) {
 	cancel()
 	if o, why, _ := r.stopped(ctx, ar); o != OutcomePass {
 		t.Errorf("%s (%s), want the finished job's pass", o, why)
+	}
+}
+
+func TestPreemptionListedLateIsStillAPreemption(t *testing.T) {
+	h := newHarness(t, 1)
+	h.cloud.preemptLag = 1
+	h.results.plan = func(vm VM, run JobRun) fakeJob {
+		if run.Attempt == 1 {
+			return fakeJob{shutdown: true, hang: true}
+		}
+		return passJob()
+	}
+	r := byID(h.run(fvJobs(1)))["1"]
+	if r.Outcome != OutcomePass || len(r.Attempts) != 2 || r.Attempts[0].Outcome != OutcomePreempted {
+		t.Errorf("job 1: %s after %d attempts, want preempted then pass", r.Outcome, len(r.Attempts))
+	}
+}
+
+func TestSetupThatAlwaysFailsGivesUp(t *testing.T) {
+	h := newHarness(t, 2)
+	h.cfg.Deadline = virtualDeadline(3 * time.Hour)
+	h.hooks.setupFail = func(VM) bool { return true }
+	start := time.Now()
+	for _, r := range h.run(fvJobs(3)) {
+		if r.Outcome != OutcomeNotRun || !strings.Contains(r.Reason, "setups all failed") {
+			t.Errorf("job %s: %s (%s)", r.ID, r.Outcome, r.Reason)
+		}
+	}
+	if h.hooks.setups > setupFailuresToGiveUp+2 {
+		t.Errorf("%d setups: kept creating VMs", h.hooks.setups)
+	}
+	if time.Since(start) > 5*time.Second {
+		t.Errorf("took %v", time.Since(start))
+	}
+}
+
+func TestUTOnlyLaneHasJobs(t *testing.T) {
+	out := filepath.Join(t.TempDir(), "jobs.json")
+	if err := felixJobsCmd([]string{"--batches", "0", "--ut", "--out", out}); err != nil {
+		t.Fatal(err)
+	}
+	jobs, err := readJobs(out)
+	if err != nil || len(jobs) != 1 || jobs[0].ID != "ut" {
+		t.Errorf("jobs %+v, %v; want only ut", jobs, err)
+	}
+	if err := felixJobsCmd([]string{"--batches", "0", "--out", out}); err == nil {
+		t.Error("a lane with no jobs was accepted")
 	}
 }

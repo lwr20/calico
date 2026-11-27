@@ -40,6 +40,8 @@ type fakeCloud struct {
 	listed    []string
 	simulated []string
 	create    func(req CreateReq) (n int, err error)
+	// preemptLag is how many lookups miss a preemption before GCE lists it.
+	preemptLag int
 }
 
 func newFakeCloud() *fakeCloud {
@@ -110,6 +112,10 @@ func (c *fakeCloud) Preempted(_ context.Context, vm VM, since time.Time) (time.T
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	at, ok := c.preempted[vm.ID]
+	if ok && c.preemptLag > 0 {
+		c.preemptLag--
+		return time.Time{}, false, nil
+	}
 	return at, ok && !at.Before(since), nil
 }
 
