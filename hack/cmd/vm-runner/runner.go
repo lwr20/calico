@@ -16,6 +16,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -165,6 +166,8 @@ type vmState struct {
 	forJob *jobState
 	// job is the job assigned to this VM until its result comes back.
 	job *jobState
+	// cancel stops the VM's worker, abandoning its setup or clean.
+	cancel context.CancelFunc
 }
 
 // assignment is what a worker gets: a copy, so it never shares jobState.
@@ -254,6 +257,10 @@ func (r *Runner) Run(ctx context.Context, jobs []Job) ([]JobRecord, error) {
 
 	// A retried CI step finds the previous attempt's VMs under the same names.
 	stale, err := r.cloud.ListPool(ctx, r.cfg.Prefix)
+	if errors.Is(err, errUnreachable) {
+		r.logf("WARNING: %v; stale VMs there are left to the final sweep.", err)
+		err = nil
+	}
 	if err != nil {
 		return nil, fmt.Errorf("listing VMs named %s-<n>: %w", r.cfg.Prefix, err)
 	}
@@ -334,7 +341,7 @@ func (r *Runner) handle(ctx context.Context, ev event) {
 	case evSetup:
 		r.onSetup(ev)
 	case evReady:
-		if v := r.vms[ev.vm]; v != nil {
+		if v := r.vms[ev.vm]; v != nil && v.phase != phaseRetiring {
 			v.phase = phaseIdle
 			v.reply = ev.reply
 		} else {
@@ -387,14 +394,18 @@ func (r *Runner) onCreated(ctx context.Context, ev evCreated) {
 			continue
 		}
 		warm = false
-		v := &vmState{vm: vm, phase: phaseSetup, forJob: ev.req.forJob}
+		vctx, cancel := context.WithCancel(ctx)
+		v := &vmState{vm: vm, phase: phaseSetup, forJob: ev.req.forJob, cancel: cancel}
 		r.vms[vm.Name] = v
 		r.workers.Add(1)
-		go r.worker(ctx, vm)
+		go r.worker(vctx, vm)
 	}
 }
 
 func (r *Runner) onSetup(ev evSetup) {
+	if v := r.vms[ev.vm.Name]; v != nil && v.phase == phaseRetiring {
+		return
+	}
 	if ev.ok {
 		r.setupFailStreak = 0
 		// Failures are often passing (preempted while booting, a short outage).
@@ -457,6 +468,7 @@ func (r *Runner) onWorkerExit(ev evWorkerExit) {
 		return
 	}
 	delete(r.vms, ev.vm)
+	v.cancel()
 	r.deleteVM(v.vm)
 	if js := v.job; js != nil && !js.done {
 		js.running = false
@@ -556,6 +568,7 @@ func (r *Runner) dispatch(ctx context.Context) {
 	}
 	r.queue = kept
 
+	blocked := r.blockedByCap()
 	for _, v := range r.sortedVMs() {
 		// Once stopping, a ready worker may already have gone.
 		if v.phase != phaseIdle || r.stopping || ctx.Err() != nil {
@@ -564,6 +577,14 @@ func (r *Runner) dispatch(ctx context.Context) {
 		order := r.queue
 		if fj := v.forJob; fj != nil && slices.Contains(r.queue, fj) && eligible(fj, v.vm) {
 			order = append([]*jobState{fj}, r.queue...)
+		}
+		if i := slices.IndexFunc(blocked, func(js *jobState) bool { return eligible(js, v.vm) }); i >= 0 {
+			order = append([]*jobState{blocked[i]}, order...)
+			blocked = slices.Delete(blocked, i, i+1)
+		} else if len(blocked) > 0 {
+			// Handing this VM on would keep the pool at the cap for good.
+			blocked = blocked[1:]
+			continue
 		}
 		for _, js := range order {
 			if !eligible(js, v.vm) {
@@ -631,15 +652,40 @@ func (r *Runner) covered(js *jobState, taken map[string]bool) bool {
 	return false
 }
 
+// blockedByCap lists the queued jobs that need their own create and get none
+// only because the pool is at its total cap.
+func (r *Runner) blockedByCap() []*jobState {
+	if r.stopping || r.createRejected != nil {
+		return nil
+	}
+	live, liveOD, _ := r.counts()
+	if live+r.pendingTotal < r.cfg.TotalCap {
+		return nil
+	}
+	var out []*jobState
+	taken := map[string]bool{}
+	for _, js := range r.queue {
+		if r.wantsOwnCreate(js, taken) && !(js.needsOnDemand && liveOD+r.pendingOnDemand >= r.onDemandCap()) {
+			out = append(out, js)
+		}
+	}
+	return out
+}
+
+// wantsOwnCreate is true for a job that needs an on-demand VM or particular
+// types, has no create under way, and no live VM could take it.
+func (r *Runner) wantsOwnCreate(js *jobState, taken map[string]bool) bool {
+	special := js.needsOnDemand || (len(js.job.MachineTypes) > 0 && !js.typesFailed)
+	return special && !js.createPending && !r.now().Before(js.retryCreateAfter) && !r.covered(js, taken)
+}
+
 func (r *Runner) provision(ctx context.Context) {
 	now := r.now()
 	live, liveOD, idleOrBooting := r.counts()
 	taken := map[string]bool{}
 
-	// A job that needs an on-demand VM or particular types gets its own create.
 	for _, js := range r.queue {
-		special := js.needsOnDemand || (len(js.job.MachineTypes) > 0 && !js.typesFailed)
-		if !special || js.createPending || now.Before(js.retryCreateAfter) || r.covered(js, taken) {
+		if !r.wantsOwnCreate(js, taken) {
 			continue
 		}
 		if js.needsOnDemand && liveOD+r.pendingOnDemand >= r.onDemandCap() {
@@ -748,11 +794,13 @@ func (r *Runner) anySpare() bool {
 // retireIdle deletes idle VMs no queued job can use, keeping one warm while a
 // job still runs so a late requeue doesn't pay a cold boot.
 func (r *Runner) retireIdle() {
-	running := false
-	for _, js := range r.jobs {
-		if js.running {
-			running = true
-			break
+	running := r.anyRunning()
+	if !running && len(r.queue) == 0 {
+		for _, v := range r.vms {
+			if v.phase == phaseSetup {
+				v.phase = phaseRetiring
+				v.cancel()
+			}
 		}
 	}
 	keptWarm := false
@@ -799,8 +847,10 @@ func (r *Runner) sweep() {
 	defer cancel()
 	left, err := r.cloud.ListPool(ctx, r.cfg.Prefix)
 	if err != nil {
-		r.logf("WARNING: could not list VMs for the final sweep: %v", err)
-		return
+		r.logf("WARNING: could not list every VM for the final sweep: %v", err)
+		if !errors.Is(err, errUnreachable) {
+			return
+		}
 	}
 	// GCE is still deleting the VMs this run deleted; asking again only errors.
 	left = slices.DeleteFunc(left, func(vm VM) bool {

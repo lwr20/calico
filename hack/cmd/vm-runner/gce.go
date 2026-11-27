@@ -104,6 +104,10 @@ func (g *gceCloud) BulkCreate(ctx context.Context, req CreateReq) ([]VM, error) 
 		_ = g.Delete(ctx, noIP...)
 	}
 	if listErr != nil && len(vms) == 0 {
+		// Unseen VMs would run outside the caps until the final sweep.
+		if err := g.deleteByName(ctx, req.Region, req.Names); err != nil {
+			listErr = errors.Join(listErr, err)
+		}
 		return nil, &CreateError{Codes: []string{"LIST_FAILED"}, Capacity: true, Err: listErr}
 	}
 	if len(vms) > 0 {
@@ -233,7 +237,12 @@ func (g *gceCloud) findByNames(ctx context.Context, region string, names []strin
 	for i, n := range names {
 		quoted[i] = regexp.QuoteMeta(n)
 	}
-	vms, err := g.list(ctx, fmt.Sprintf(`name eq "%s"`, strings.Join(quoted, "|")))
+	var vms []VM
+	err := retryGCE(ctx, func() error {
+		var err error
+		vms, err = g.list(ctx, fmt.Sprintf(`name eq "%s"`, strings.Join(quoted, "|")))
+		return err
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -262,10 +271,36 @@ func (g *gceCloud) findByNames(ctx context.Context, region string, names []strin
 	return out, nil
 }
 
+// deleteByName deletes names in every zone of region, for VMs whose zones
+// aren't known.
+func (g *gceCloud) deleteByName(ctx context.Context, region string, names []string) error {
+	var reg *compute.Region
+	if err := retryGCE(ctx, func() error {
+		var err error
+		reg, err = g.svc.Regions.Get(g.project, region).Context(ctx).Do()
+		return err
+	}); err != nil {
+		return err
+	}
+	var vms []VM
+	for _, z := range reg.Zones {
+		for _, n := range names {
+			vms = append(vms, VM{Name: n, Zone: path.Base(z), Region: region})
+		}
+	}
+	return g.Delete(ctx, vms...)
+}
+
+// errUnreachable means a listing is missing the zones GCE couldn't reach; the
+// VMs it did list are still returned.
+var errUnreachable = errors.New("zones unreachable")
+
 func (g *gceCloud) list(ctx context.Context, filter string) ([]VM, error) {
 	var vms []VM
+	var unreachable []string
 	err := g.svc.Instances.AggregatedList(g.project).Filter(filter).ReturnPartialSuccess(true).Context(ctx).
 		Pages(ctx, func(l *compute.InstanceAggregatedList) error {
+			unreachable = append(unreachable, l.Unreachables...)
 			for _, scoped := range l.Items {
 				for _, inst := range scoped.Instances {
 					vms = append(vms, vmFromInstance(inst))
@@ -273,6 +308,9 @@ func (g *gceCloud) list(ctx context.Context, filter string) ([]VM, error) {
 			}
 			return nil
 		})
+	if err == nil && len(unreachable) > 0 {
+		err = fmt.Errorf("%w: %v", errUnreachable, unreachable)
+	}
 	return vms, err
 }
 

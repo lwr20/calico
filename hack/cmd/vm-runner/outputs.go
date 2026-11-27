@@ -238,7 +238,6 @@ func writeCapacityJSON(path, scoresPath, run, lane string, jobs []JobRecord) err
 	return writeJSON(path, out)
 }
 
-// appendFile appends data to path, creating it.
 func appendFile(path string, data []byte) error {
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {

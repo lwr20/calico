@@ -198,7 +198,7 @@ func passJob() fakeJob {
 
 func runKey(run JobRun) string { return fmt.Sprintf("%s/%d", run.Job.ID, run.Attempt) }
 
-var errUnreachable = errors.New("ssh: connect to host: Connection refused")
+var errSSHRefused = errors.New("ssh: connect to host: Connection refused")
 
 func (f *fakeResults) reachable(vm VM, fr *fakeRun) bool {
 	return f.cloud.alive(vm.Name) && (fr == nil || !fr.plan.wedge || fr.polls == 0)
@@ -209,7 +209,7 @@ func (f *fakeResults) Start(_ context.Context, vm VM, run JobRun) error {
 	defer f.mu.Unlock()
 	plan := f.plan(vm, run)
 	if plan.startErr || !f.cloud.alive(vm.Name) {
-		return errUnreachable
+		return errSSHRefused
 	}
 	f.starts = append(f.starts, startRec{vm: vm, job: run.Job.ID, attempt: run.Attempt})
 	f.runs[runKey(run)] = &fakeRun{plan: plan, vm: vm}
@@ -236,7 +236,7 @@ func (f *fakeResults) Status(_ context.Context, vm VM, run JobRun) (Status, erro
 		f.mu.Unlock()
 	}
 	if !f.reachable(vm, fr) {
-		return Status{}, errUnreachable
+		return Status{}, errSSHRefused
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -267,7 +267,7 @@ func (f *fakeResults) Fetch(_ context.Context, vm VM, run JobRun, dir string) er
 	fr := f.runs[runKey(run)]
 	f.mu.Unlock()
 	if !f.reachable(vm, fr) || fr.plan.fetchFail {
-		return errUnreachable
+		return errSSHRefused
 	}
 	if err := os.MkdirAll(filepath.Join(dir, "report"), 0o755); err != nil {
 		return err
@@ -305,16 +305,22 @@ func (f *fakeResults) startsOf(job string) []startRec {
 type fakeHooks struct {
 	mu        sync.Mutex
 	setupFail func(vm VM) bool
+	// setupHang makes a setup run until it is cancelled.
+	setupHang func(vm VM) bool
 	cleanFail func(vm VM) bool
 	setups    int
 	cleans    int
 }
 
-func (h *fakeHooks) Setup(_ context.Context, vm VM, logPath string) error {
+func (h *fakeHooks) Setup(ctx context.Context, vm VM, logPath string) error {
 	h.mu.Lock()
 	h.setups++
 	h.mu.Unlock()
 	_ = appendFile(logPath, []byte("setup "+vm.Name+"\n"))
+	if h.setupHang != nil && h.setupHang(vm) {
+		<-ctx.Done()
+		return ctx.Err()
+	}
 	if h.setupFail != nil && h.setupFail(vm) {
 		return errors.New("setup failed")
 	}

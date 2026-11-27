@@ -184,7 +184,6 @@ func (s sshResults) Fetch(ctx context.Context, vm VM, run JobRun, dir string) er
 	return nil
 }
 
-// mergeInto moves src's entries into dst, replacing same-named ones.
 func mergeInto(src, dst string) error {
 	entries, err := os.ReadDir(src)
 	if err != nil {

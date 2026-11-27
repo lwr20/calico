@@ -22,6 +22,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -276,5 +277,65 @@ func TestMaxRunCoversTheDeadline(t *testing.T) {
 	}
 	if spec.MaxRunDuration < 6*time.Hour {
 		t.Errorf("max run %v ends before the deadline", spec.MaxRunDuration)
+	}
+}
+
+func TestSpecialJobIsNotStarvedAtTheCap(t *testing.T) {
+	h := newHarness(t, 2)
+	var failed atomic.Bool
+	h.hooks.setupFail = func(vm VM) bool {
+		return vm.Type == "c4d-standard-4" && failed.CompareAndSwap(false, true)
+	}
+	h.results.plan = func(VM, JobRun) fakeJob {
+		j := passJob()
+		j.polls = 100
+		return j
+	}
+	ut := Job{ID: "ut", Command: []string{"make", "ut"}, TimeoutMinutes: 55, MachineTypes: []string{"c4d-standard-4"}}
+	recs := byID(h.run(append([]Job{ut}, fvJobs(12)...)))
+	utStart := recs["ut"].Attempts[0].Start
+	later := 0
+	for id, r := range recs {
+		if id != "ut" && r.Attempts[0].Start.After(utStart) {
+			later++
+		}
+	}
+	if recs["ut"].Outcome != OutcomePass || later == 0 {
+		t.Errorf("ut %s, started after every FV batch: it waited for the queue to drain", recs["ut"].Outcome)
+	}
+}
+
+func TestSetupNobodyNeedsDoesNotHoldTheRunOpen(t *testing.T) {
+	h := newHarness(t, 2)
+	h.hooks.setupHang = func(vm VM) bool { return vm.Name != "fv-1-1" }
+	start := time.Now()
+	for _, r := range h.run(fvJobs(2)) {
+		if r.Outcome != OutcomePass {
+			t.Errorf("job %s: %s", r.ID, r.Outcome)
+		}
+	}
+	if time.Since(start) > 5*time.Second {
+		t.Errorf("took %v: waited on a setup after the last job", time.Since(start))
+	}
+}
+
+func TestJobThatFinishedAsTheRunnerStoppedKeepsItsResult(t *testing.T) {
+	h := newHarness(t, 1)
+	r := NewRunner(h.cfg, h.cloud, h.results, h.hooks, h.memo)
+	vm := VM{Name: "fv-1-1", ID: 1, Model: Spot}
+	h.cloud.vms[vm.Name] = vm
+	h.results.plan = func(VM, JobRun) fakeJob { return passJob() }
+	job := fvJobs(1)[0]
+	run := JobRun{Job: job, Attempt: 1}
+	if err := h.results.Start(context.Background(), vm, run); err != nil {
+		t.Fatal(err)
+	}
+	h.results.runs[runKey(run)].polls = 5
+	ar := &attemptRun{vm: vm, a: &assignment{job: job, attempt: 1}, run: run,
+		att: Attempt{Start: r.now()}, logPath: r.layout.logPath(job.ID), prefix: "[1]"}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if o, why, _ := r.stopped(ctx, ar); o != OutcomePass {
+		t.Errorf("%s (%s), want the finished job's pass", o, why)
 	}
 }

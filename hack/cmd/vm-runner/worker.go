@@ -31,6 +31,9 @@ func (r *Runner) worker(ctx context.Context, vm VM) {
 
 	setupLog := r.layout.setupLogPath(vm.Name)
 	err := r.hooks.Setup(ctx, vm, setupLog)
+	if ctx.Err() != nil {
+		return
+	}
 	if err != nil {
 		r.logf("VM %s (%s %s in %s): setup FAILED: %v; log in %s", vm.Name, vm.Model, vm.Type, vm.Zone, err, filepath.Base(setupLog))
 	} else {
@@ -68,7 +71,10 @@ func (r *Runner) worker(ctx context.Context, vm VM) {
 			return
 		}
 		_ = r.results.Forget(ctx, vm, JobRun{Job: a.job, Attempt: a.attempt})
-		if err := r.hooks.Clean(ctx, vm, r.layout.cleanLogPath(vm.Name)); err != nil {
+		if ctx.Err() != nil {
+			return
+		}
+		if err := r.hooks.Clean(ctx, vm, r.layout.cleanLogPath(vm.Name)); err != nil && ctx.Err() == nil {
 			r.logf("VM %s: clean FAILED, retiring it: %v", vm.Name, err)
 			return
 		}
@@ -144,12 +150,7 @@ func (r *Runner) execute(ctx context.Context, ar *attemptRun) (Outcome, string, 
 	lossChecked := time.Time{}
 	for {
 		if !sleepCtx(ctx, r.cfg.PollInterval) {
-			r.stopJob(ar)
-			sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
-			r.awaitStopped(sctx, ar)
-			_ = r.fetch(sctx, ar)
-			cancel()
-			return OutcomeNotRun, "runner stopped", true
+			return r.stopped(ctx, ar)
 		}
 		st, err := r.results.Status(ctx, vm, run)
 		if err == nil {
@@ -165,6 +166,10 @@ func (r *Runner) execute(ctx context.Context, ar *attemptRun) (Outcome, string, 
 			case Unstarted:
 				return OutcomeVMLost, "the job never started", true
 			case Done:
+				// The poll's pull can miss the tail, which holds the summary.
+				for try := 0; try < 3 && r.pullLog(ctx, ar) != nil; try++ {
+					sleepCtx(ctx, time.Second)
+				}
 				return r.collect(ctx, ar, st.RC)
 			case Gone:
 				r.captureSerial(ctx, ar)
@@ -187,6 +192,25 @@ func (r *Runner) execute(ctx context.Context, ar *attemptRun) (Outcome, string, 
 		}
 	}
 }
+
+// stopped winds an attempt down after the runner was cancelled. CI kills a
+// cancelled step soon after, and VMs are deleted only once every worker is
+// back, so it is kept short.
+func (r *Runner) stopped(ctx context.Context, ar *attemptRun) (Outcome, string, bool) {
+	sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), stopBudget)
+	defer cancel()
+	if st, err := r.results.Status(sctx, ar.vm, ar.run); err == nil && st.State == Done {
+		r.pullLog(sctx, ar)
+		return r.collect(sctx, ar, st.RC)
+	}
+	_ = r.results.Kill(sctx, ar.vm, ar.run)
+	r.awaitStopped(sctx, ar)
+	_ = r.fetch(sctx, ar)
+	return OutcomeNotRun, "runner stopped", true
+}
+
+// stopBudget fits inside Kubernetes' default 30 s termination grace period.
+const stopBudget = 15 * time.Second
 
 func (r *Runner) stopJob(ar *attemptRun) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -239,7 +263,11 @@ func (r *Runner) collect(ctx context.Context, ar *attemptRun, rc int) (Outcome, 
 // fetch outlives the runner's cancellation: a finished job's reports are
 // worth the wait.
 func (r *Runner) fetch(ctx context.Context, ar *attemptRun) error {
-	fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), r.cfg.FetchTimeout)
+	timeout := r.cfg.FetchTimeout
+	if d, ok := ctx.Deadline(); ok {
+		timeout = min(timeout, time.Until(d))
+	}
+	fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
 	defer cancel()
 	return r.results.Fetch(fctx, ar.vm, ar.run, r.layout.jobDir(ar.run.Job.ID))
 }
@@ -337,10 +365,10 @@ func (r *Runner) preempted(ctx context.Context, ar *attemptRun) (time.Time, bool
 	return time.Time{}, false, err
 }
 
-func (r *Runner) pullLog(ctx context.Context, ar *attemptRun) {
+func (r *Runner) pullLog(ctx context.Context, ar *attemptRun) error {
 	data, err := r.results.Log(ctx, ar.vm, ar.run, ar.offset)
 	if err != nil || len(data) == 0 {
-		return
+		return err
 	}
 	ar.offset += int64(len(data))
 	_ = appendFile(ar.logPath, data)
@@ -351,6 +379,7 @@ func (r *Runner) pullLog(ctx context.Context, ar *attemptRun) {
 			r.logf("%s %s", ar.prefix, line)
 		}
 	}
+	return nil
 }
 
 func (r *Runner) captureSerial(ctx context.Context, ar *attemptRun) {
@@ -387,7 +416,6 @@ func (r *Runner) remember(ctx context.Context, ar *attemptRun, fromLog bool) {
 	}
 }
 
-// retry retries f with backoff for up to PollRetryWindow.
 func (r *Runner) retry(ctx context.Context, f func() error) error {
 	start := r.now()
 	backoff := r.cfg.PollInterval
