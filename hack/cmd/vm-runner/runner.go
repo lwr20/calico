@@ -266,12 +266,12 @@ func (r *Runner) Run(ctx context.Context, jobs []Job) ([]JobRecord, error) {
 	}
 	if len(stale) > 0 {
 		r.logf("Deleting %d VMs left by an earlier attempt of this step.", len(stale))
-		if err := r.cloud.Delete(ctx, stale...); err != nil {
-			r.logf("WARNING: could not delete them all: %v", err)
-		} else {
-			for _, vm := range stale {
-				r.deleting.Store(vm.ID, true)
+		for _, vm := range stale {
+			if err := r.cloud.Delete(ctx, vm); err != nil {
+				r.logf("WARNING: could not delete %s: %v", vm.Name, err)
+				continue
 			}
+			r.deleting.Store(vm.ID, true)
 		}
 	}
 
@@ -380,11 +380,13 @@ func (r *Runner) onCreated(ctx context.Context, ev evCreated) {
 			r.createBlockedTil = r.now().Add(r.cfg.CreateRetryInterval)
 		}
 	}
+	warm := r.anyRunning() && !r.anySpare()
 	for _, vm := range ev.vms {
-		if r.stopping || len(r.queue) == 0 {
+		if r.stopping || (len(r.queue) == 0 && !warm) {
 			r.deleteVM(vm)
 			continue
 		}
+		warm = false
 		v := &vmState{vm: vm, phase: phaseSetup, forJob: ev.req.forJob}
 		r.vms[vm.Name] = v
 		r.workers.Add(1)
@@ -662,6 +664,8 @@ func (r *Runner) provision(ctx context.Context) {
 		r.startCreate(ctx, req)
 	}
 
+	live, liveOD, idleOrBooting = r.counts()
+
 	// General top-up toward the target.
 	if now.Before(r.createBlockedTil) {
 		return
@@ -720,6 +724,25 @@ func (r *Runner) retire(v *vmState) {
 	v.phase = phaseRetiring
 	close(v.reply)
 	v.reply = nil
+}
+
+func (r *Runner) anyRunning() bool {
+	for _, js := range r.jobs {
+		if js.running {
+			return true
+		}
+	}
+	return false
+}
+
+// anySpare says whether a VM is idle or still setting up.
+func (r *Runner) anySpare() bool {
+	for _, v := range r.vms {
+		if v.phase == phaseIdle || v.phase == phaseSetup {
+			return true
+		}
+	}
+	return false
 }
 
 // retireIdle deletes idle VMs no queued job can use, keeping one warm while a

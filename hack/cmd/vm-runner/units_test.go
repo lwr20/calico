@@ -286,7 +286,7 @@ func TestSSHResultsKilledJobsTrapWritesOutputs(t *testing.T) {
 	s := sshResults{remote: localRemote{home: home}}
 	ctx := context.Background()
 	run := JobRun{Job: Job{ID: "4", Outputs: []string{"out"}, Command: []string{"bash", "-c",
-		"trap 'mkdir -p out; echo partial > out/r.xml; exit 143' TERM; sleep 300 & wait"}}, Attempt: 1}
+		"trap 'sleep 1; mkdir -p out; echo partial > out/r.xml; exit 143' TERM; sleep 300 & wait"}}, Attempt: 1}
 	if err := s.Start(ctx, VM{}, run); err != nil {
 		t.Fatal(err)
 	}

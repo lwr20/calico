@@ -102,14 +102,16 @@ func (s sshResults) Start(ctx context.Context, vm VM, run JobRun) error {
 	}
 	var b strings.Builder
 	// Start is retried when SSH fails, which can happen after the job began
-	// or even finished; it must not run again.
-	fmt.Fprintf(&b, `if [ -e %s/pid ]; then exit 0; fi; `, shq(d))
-	fmt.Fprintf(&b, "set -e; rm -rf %s; mkdir -p %s; ", shq(d), shq(d))
+	// or even finished; mkdir claims the attempt before anything forks, so a
+	// retry finds it taken.
+	fmt.Fprintf(&b, "mkdir -p vm-runner && { mkdir %s 2>/dev/null || exit 0; }; set -e; ", shq(d))
 	// A reused VM still holds the previous job's outputs at the same paths.
 	for _, o := range run.Job.Outputs {
 		fmt.Fprintf(&b, "rm -rf %s; ", shq(o))
 	}
-	fmt.Fprintf(&b, "printf '%%s\\n' %s > %s/cmd; ", shq(strings.Join(quoted, " ")), shq(d))
+	// exec keeps the job the wrapper's own child, so rc waits for the job's
+	// traps, not just an intermediate shell's death.
+	fmt.Fprintf(&b, "printf '%%s\\n' %s > %s/cmd; ", shq("exec "+strings.Join(quoted, " ")), shq(d))
 	// setsid makes the job a process group that Kill can signal as a whole;
 	// rc is renamed into place so a reader never sees half of it.
 	// The wrapper traps TERM rather than ignoring it, which the job would

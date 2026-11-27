@@ -159,6 +159,8 @@ type fakeJob struct {
 	// with the VM still up; preempt and vanish lose the VM.
 	hang, gone, wedge, preempt, vanish bool
 	startErr, fetchFail                bool
+	// shutdown is a preemption that kills the job before the VM goes.
+	shutdown bool
 }
 
 type fakeRun struct {
@@ -224,6 +226,14 @@ func (f *fakeResults) Status(_ context.Context, vm VM, run JobRun) (Status, erro
 	}
 	if fr.plan.vanish && fr.polls == 1 {
 		f.cloud.vanish(vm)
+	}
+	if fr.plan.shutdown && fr.polls == 1 {
+		f.cloud.mu.Lock()
+		f.cloud.preempted[vm.ID] = time.Now()
+		f.cloud.mu.Unlock()
+		f.mu.Lock()
+		fr.killed = true
+		f.mu.Unlock()
 	}
 	if !f.reachable(vm, fr) {
 		return Status{}, errUnreachable

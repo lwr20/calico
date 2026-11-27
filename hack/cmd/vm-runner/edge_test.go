@@ -221,6 +221,21 @@ func TestPoolTargetRegrowsAfterSetupRecovers(t *testing.T) {
 	}
 }
 
+func TestJobKilledByPreemptionShutdownIsRequeued(t *testing.T) {
+	h := newHarness(t, 1)
+	h.results.plan = func(vm VM, run JobRun) fakeJob {
+		if run.Attempt == 1 {
+			return fakeJob{shutdown: true, hang: true}
+		}
+		return passJob()
+	}
+	recs := byID(h.run(fvJobs(1)))
+	r := recs["1"]
+	if r.Outcome != OutcomePass || len(r.Attempts) != 2 || r.Attempts[0].Outcome != OutcomePreempted {
+		t.Errorf("job 1: %s after %d attempts, want preempted then pass", r.Outcome, len(r.Attempts))
+	}
+}
+
 func TestJobIDsSharingALogNameAreRefused(t *testing.T) {
 	jobs := []Job{{ID: "7", Command: []string{"x"}, TimeoutMinutes: 1}, {ID: "007", Command: []string{"x"}, TimeoutMinutes: 1}}
 	if err := validateJobs(jobs); err == nil {

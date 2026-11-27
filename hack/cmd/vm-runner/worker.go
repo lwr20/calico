@@ -83,6 +83,8 @@ type attemptRun struct {
 	att     Attempt
 	logPath string
 	offset  int64
+	// partial is the unterminated last line of the log pulled so far.
+	partial []byte
 	prefix  string
 }
 
@@ -143,12 +145,22 @@ func (r *Runner) execute(ctx context.Context, ar *attemptRun) (Outcome, string, 
 	for {
 		if !sleepCtx(ctx, r.cfg.PollInterval) {
 			r.stopJob(ar)
+			sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
+			r.awaitStopped(sctx, ar)
+			_ = r.fetch(sctx, ar)
+			cancel()
 			return OutcomeNotRun, "runner stopped", true
 		}
 		st, err := r.results.Status(ctx, vm, run)
 		if err == nil {
 			lastOK = r.now()
 			r.pullLog(ctx, ar)
+			// A spot VM shutting down for preemption kills the job first.
+			if (st.State == Done && st.RC != 0) || st.State == Gone {
+				if at, ok := r.spotPreempted(ctx, ar); ok {
+					return OutcomePreempted, "preempted at " + at.UTC().Format(time.RFC3339), true
+				}
+			}
 			switch st.State {
 			case Done:
 				return r.collect(ctx, ar, st.RC)
@@ -287,6 +299,20 @@ func (r *Runner) verdictFromLog(ctx context.Context, ar *attemptRun, verdict Out
 	return verdict, "verdict from log: " + why, true
 }
 
+// spotPreempted reports a recorded preemption of a spot VM; an API error
+// counts as none.
+func (r *Runner) spotPreempted(ctx context.Context, ar *attemptRun) (time.Time, bool) {
+	if ar.vm.Model != Spot {
+		return time.Time{}, false
+	}
+	at, ok, err := r.preempted(ctx, ar)
+	if err != nil || !ok {
+		return time.Time{}, false
+	}
+	ar.att.PreemptedAt = &at
+	return at, true
+}
+
 // preempted asks GCE, retrying an API error.
 func (r *Runner) preempted(ctx context.Context, ar *attemptRun) (time.Time, bool, error) {
 	var err error
@@ -312,7 +338,9 @@ func (r *Runner) pullLog(ctx context.Context, ar *attemptRun) {
 	}
 	ar.offset += int64(len(data))
 	_ = appendFile(ar.logPath, data)
-	for _, line := range bytes.Split(bytes.TrimRight(data, "\n"), []byte("\n")) {
+	lines := bytes.Split(append(ar.partial, data...), []byte("\n"))
+	ar.partial = append([]byte(nil), lines[len(lines)-1]...)
+	for _, line := range lines[:len(lines)-1] {
 		if isMonitored(string(line)) {
 			r.logf("%s %s", ar.prefix, line)
 		}

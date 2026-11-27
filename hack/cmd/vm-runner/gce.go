@@ -250,8 +250,12 @@ func (g *gceCloud) findByNames(ctx context.Context, region string, names []strin
 				break
 			}
 			inst, err := g.svc.Instances.Get(g.project, out[i].Zone, out[i].Name).Context(ctx).Do()
-			if err == nil {
-				out[i] = vmFromInstance(inst)
+			if err != nil {
+				continue
+			}
+			out[i] = vmFromInstance(inst)
+			if s := inst.Status; s != "PROVISIONING" && s != "STAGING" && s != "RUNNING" {
+				break
 			}
 		}
 	}
