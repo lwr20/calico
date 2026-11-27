@@ -91,3 +91,51 @@ func TestPublicKeyFromPrivate(t *testing.T) {
 		t.Errorf("derived %q, want %q", got, want)
 	}
 }
+
+func TestNewNamesSkipAnEarlierAttemptsVMs(t *testing.T) {
+	h := newHarness(t, 1)
+	h.cloud.vms["fv-1-12"] = VM{Name: "fv-1-12", ID: 99}
+	h.run(fvJobs(1))
+	for _, vm := range h.cloud.createdVMs() {
+		if vm.Name == "fv-1-1" || vm.Name == "fv-1-12" {
+			t.Errorf("created %s, a name the earlier attempt's VMs may still hold", vm.Name)
+		}
+	}
+}
+
+func TestRejectedTypedCreateLeavesThePoolAlone(t *testing.T) {
+	h := newHarness(t, 1)
+	h.cloud.create = func(req CreateReq) (int, error) {
+		if req.Type == "c4d-standard-4" {
+			return 0, &CreateError{Codes: []string{"INVALID_FIELD_VALUE"}, Err: errors.New("bad type")}
+		}
+		return len(req.Names), nil
+	}
+	jobs := append([]Job{{ID: "ut", Command: []string{"make", "ut"}, TimeoutMinutes: 55, MachineTypes: []string{"c4d-standard-4"}}}, fvJobs(2)...)
+	for _, r := range h.run(jobs) {
+		if r.Outcome != OutcomePass {
+			t.Errorf("job %s: %s (%s)", r.ID, r.Outcome, r.Reason)
+		}
+	}
+}
+
+func TestTimeoutWithPassingPartialReportStillFails(t *testing.T) {
+	h := newHarness(t, 1)
+	h.results.plan = func(VM, JobRun) fakeJob { return fakeJob{hang: true, report: true} }
+	jobs := fvJobs(1)
+	jobs[0].TimeoutMinutes = 1
+	recs := byID(h.run(jobs))
+	if recs["1"].Outcome != OutcomeTimeout {
+		t.Fatalf("job 1: %s", recs["1"].Outcome)
+	}
+	if !exists(filepath.Join(h.cfg.Artifacts, "1", "report", "vm-runner_timeout_001.xml")) {
+		t.Error("no failing JUnit beside the partial, passing report")
+	}
+}
+
+func TestJobIDsSharingALogNameAreRefused(t *testing.T) {
+	jobs := []Job{{ID: "7", Command: []string{"x"}, TimeoutMinutes: 1}, {ID: "007", Command: []string{"x"}, TimeoutMinutes: 1}}
+	if err := validateJobs(jobs); err == nil {
+		t.Error("ids 7 and 007 accepted")
+	}
+}

@@ -123,7 +123,7 @@ func (r *Runner) execute(ctx context.Context, ar *attemptRun) (Outcome, string, 
 	vm, run := ar.vm, ar.run
 	if err := r.retry(ctx, func() error { return r.results.Start(ctx, vm, run) }); err != nil {
 		if ctx.Err() != nil {
-			return OutcomeFail, "runner stopped", true
+			return OutcomeNotRun, "runner stopped", true
 		}
 		if o, reason, decided := r.checkLoss(ctx, ar, false); decided {
 			return o, reason, true
@@ -147,7 +147,7 @@ func (r *Runner) execute(ctx context.Context, ar *attemptRun) (Outcome, string, 
 	for {
 		if !sleepCtx(ctx, r.cfg.PollInterval) {
 			r.stopJob(ar)
-			return OutcomeFail, "runner stopped", true
+			return OutcomeNotRun, "runner stopped", true
 		}
 		st, err := r.results.Status(ctx, vm, run)
 		if err == nil {
@@ -219,11 +219,9 @@ func (r *Runner) checkLoss(ctx context.Context, ar *attemptRun, wedgeOK bool) (O
 	vm := ar.vm
 	lost, why := false, ""
 	if vm.Model == Spot {
+		// On an API error the VM's state below still decides.
 		at, preempted, err := r.preempted(ctx, ar)
-		if err != nil {
-			return OutcomeFail, "preemption check failed", true
-		}
-		if preempted {
+		if err == nil && preempted {
 			ar.att.PreemptedAt = &at
 			lost, why = true, "preempted at "+at.UTC().Format(time.RFC3339)
 		}

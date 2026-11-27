@@ -450,8 +450,9 @@ func TestCancelEndsQueuedJobsNotRun(t *testing.T) {
 	if r := recs["3"]; r.Outcome != OutcomeNotRun {
 		t.Errorf("job 3: %s, want not-run", r.Outcome)
 	}
-	if r := recs["1"]; r.Outcome == OutcomePass || r.Outcome == "" {
-		t.Errorf("job 1: %q, want a failure", r.Outcome)
+	// A cancelled run isn't a test failure.
+	if r := recs["1"]; r.Outcome != OutcomeNotRun {
+		t.Errorf("job 1: %q, want not-run", r.Outcome)
 	}
 	if h.results.kills == 0 {
 		t.Error("the running job was not killed")

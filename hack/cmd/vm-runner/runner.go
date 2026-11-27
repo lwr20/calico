@@ -160,6 +160,8 @@ type vmState struct {
 	reply chan *assignment
 	// forJob is the job this VM was created for, if any.
 	forJob *jobState
+	// job is the job assigned to this VM until its result comes back.
+	job *jobState
 }
 
 // assignment is what a worker gets: a copy, so it never shares jobState.
@@ -250,6 +252,13 @@ func (r *Runner) Run(ctx context.Context, jobs []Job) ([]JobRecord, error) {
 	if err != nil {
 		return nil, fmt.Errorf("listing VMs named %s-<n>: %w", r.cfg.Prefix, err)
 	}
+	for _, vm := range stale {
+		var n int64
+		if _, err := fmt.Sscanf(vm.Name[len(r.cfg.Prefix)+1:], "%d", &n); err == nil && n > r.nameSeq.Load() {
+			// GCE holds a name until its delete finishes, which isn't awaited.
+			r.nameSeq.Store(n)
+		}
+	}
 	if len(stale) > 0 {
 		r.logf("Deleting %d VMs left by an earlier attempt of this step.", len(stale))
 		if err := r.cloud.Delete(ctx, stale...); err != nil {
@@ -335,14 +344,16 @@ func (r *Runner) onCreated(ctx context.Context, ev evCreated) {
 	r.creating--
 	r.pendingTotal -= ev.req.count
 	r.pendingOnDemand -= ev.req.odAllowance
-	if ev.rejected != nil && r.createRejected == nil {
+	if ev.rejected != nil && r.createRejected == nil && ev.req.forJob == nil {
 		r.logf("GCE rejected every create, not for capacity; creating no more VMs: %v", ev.rejected)
 		r.createRejected = ev.rejected
 	}
 	if js := ev.req.forJob; js != nil {
 		js.createPending = false
 		if len(ev.vms) == 0 {
-			if len(ev.req.types) > 0 {
+			// Only a walk that could reach on demand proves the types can't be had.
+			triedAll := ev.req.odAllowance > 0 || ev.rejected != nil
+			if len(ev.req.types) > 0 && triedAll {
 				r.logf("No VM of %s could be created for job %s; it will take any VM.", strings.Join(ev.req.types, " or "), js.job.ID)
 				js.typesFailed = true
 			} else {
@@ -356,7 +367,7 @@ func (r *Runner) onCreated(ctx context.Context, ev evCreated) {
 		r.createBlockedTil = r.now().Add(r.cfg.CreateRetryInterval)
 	}
 	for _, vm := range ev.vms {
-		if r.stopping {
+		if r.stopping || len(r.queue) == 0 {
 			r.deleteVM(vm)
 			continue
 		}
@@ -385,8 +396,11 @@ func (r *Runner) onSetup(ev evSetup) {
 }
 
 func (r *Runner) onJobDone(ev evJobDone) {
-	if v := r.vms[ev.vm]; v != nil && v.phase == phaseBusy {
-		v.phase = phaseSetup // Cleaning; the worker reports ready or exits.
+	if v := r.vms[ev.vm]; v != nil {
+		v.job = nil
+		if v.phase == phaseBusy {
+			v.phase = phaseSetup // Cleaning; the worker reports ready or exits.
+		}
 	}
 	js := r.jobByID(ev.job)
 	js.running = false
@@ -420,6 +434,10 @@ func (r *Runner) onWorkerExit(ev evWorkerExit) {
 	}
 	delete(r.vms, ev.vm)
 	r.deleteVM(v.vm)
+	if js := v.job; js != nil && !js.done {
+		js.running = false
+		r.finish(js, OutcomeNotRun, "runner stopped")
+	}
 }
 
 func (r *Runner) jobByID(id string) *jobState {
@@ -441,7 +459,7 @@ func (r *Runner) finish(js *jobState, outcome Outcome, reason string) {
 		if _, err := os.Stat(r.layout.logPath(id)); err == nil {
 			_ = os.Rename(r.layout.logPath(id), r.layout.failedLogPath(id))
 		}
-		if !hasReports(r.layout.reportDir(id)) {
+		if !hasFailingReport(r.layout.reportDir(id)) {
 			msg := fmt.Sprintf("Job %s ended %s", id, outcome)
 			if reason != "" {
 				msg += ": " + reason
@@ -516,7 +534,8 @@ func (r *Runner) dispatch(ctx context.Context) {
 	r.queue = kept
 
 	for _, v := range r.sortedVMs() {
-		if v.phase != phaseIdle {
+		// Once stopping, a ready worker may already have gone.
+		if v.phase != phaseIdle || r.stopping || ctx.Err() != nil {
 			continue
 		}
 		for i, js := range r.queue {
@@ -526,6 +545,7 @@ func (r *Runner) dispatch(ctx context.Context) {
 			r.queue = slices.Delete(r.queue, i, i+1)
 			js.running = true
 			v.phase = phaseBusy
+			v.job = js
 			a := &assignment{
 				job:      js.job,
 				attempt:  len(js.attempts) + 1,

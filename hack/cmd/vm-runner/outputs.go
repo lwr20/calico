@@ -116,6 +116,19 @@ func writeSyntheticJUnit(dir, id, outcome, message string, failed bool, elapsed 
 	return os.WriteFile(filepath.Join(dir, name), append([]byte(xml.Header), append(out, '\n')...), 0o644)
 }
 
+// hasFailingReport says whether a JUnit report in dir already records a
+// failure; partial reports from a hung or killed job may show only passes.
+func hasFailingReport(dir string) bool {
+	matches, _ := filepath.Glob(filepath.Join(dir, "*.xml"))
+	for _, m := range matches {
+		data, err := os.ReadFile(m)
+		if err == nil && (strings.Contains(string(data), "<failure") || strings.Contains(string(data), "<error")) {
+			return true
+		}
+	}
+	return false
+}
+
 func hasReports(dir string) bool {
 	matches, _ := filepath.Glob(filepath.Join(dir, "*.xml"))
 	return len(matches) > 0

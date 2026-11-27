@@ -59,6 +59,7 @@ func readJobs(path string) ([]Job, error) {
 
 func validateJobs(jobs []Job) error {
 	seen := map[string]bool{}
+	logNames := map[string]string{}
 	for _, j := range jobs {
 		switch {
 		case j.ID == "":
@@ -70,6 +71,10 @@ func validateJobs(jobs []Job) error {
 		case j.TimeoutMinutes <= 0:
 			return fmt.Errorf("job %q has no timeout", j.ID)
 		}
+		if other, ok := logNames[jobIDForLog(j.ID)]; ok {
+			return fmt.Errorf("job ids %q and %q share the log name test-%s.log", other, j.ID, jobIDForLog(j.ID))
+		}
+		logNames[jobIDForLog(j.ID)] = j.ID
 		seen[j.ID] = true
 	}
 	return nil
