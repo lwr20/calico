@@ -92,6 +92,9 @@ const (
 	Done    StatusState = "done"
 	// Gone means the job's process is gone without writing rc.
 	Gone StatusState = "gone"
+	// Unstarted means the attempt was claimed but the job never launched,
+	// e.g. SSH dropped mid-Start.
+	Unstarted StatusState = "unstarted"
 )
 
 // ResultSource starts a job attempt and reads its progress and results.

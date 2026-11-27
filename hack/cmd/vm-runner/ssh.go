@@ -113,10 +113,10 @@ func (s sshResults) Start(ctx context.Context, vm VM, run JobRun) error {
 	// traps, not just an intermediate shell's death.
 	fmt.Fprintf(&b, "printf '%%s\\n' %s > %s/cmd; ", shq("exec "+strings.Join(quoted, " ")), shq(d))
 	// setsid makes the job a process group that Kill can signal as a whole;
-	// rc is renamed into place so a reader never sees half of it.
+	// pid and rc are renamed into place so a reader never sees half of one.
 	// The wrapper traps TERM rather than ignoring it, which the job would
 	// inherit; so a killed job still gets an rc once its own traps have run.
-	inner := fmt.Sprintf("trap : TERM; echo $$ > %[1]s/pid; bash %[1]s/cmd > %[1]s/log 2>&1; echo $? > %[1]s/rc.tmp; mv %[1]s/rc.tmp %[1]s/rc", d)
+	inner := fmt.Sprintf("trap : TERM; echo $$ > %[1]s/pid.tmp; mv %[1]s/pid.tmp %[1]s/pid; bash %[1]s/cmd > %[1]s/log 2>&1; echo $? > %[1]s/rc.tmp; mv %[1]s/rc.tmp %[1]s/rc", d)
 	fmt.Fprintf(&b, "setsid nohup bash -c %s < /dev/null > /dev/null 2>&1 &", shq(inner))
 	_, err := s.remote.Run(ctx, vm, b.String())
 	return err
@@ -125,8 +125,10 @@ func (s sshResults) Start(ctx context.Context, vm VM, run JobRun) error {
 // Status checks rc again after the pid: the job may finish between the two.
 func (s sshResults) Status(ctx context.Context, vm VM, run JobRun) (Status, error) {
 	d := shq(attemptDir(run))
+	// Each file is tested in the order the wrapper creates them, so one that
+	// appears mid-script can't be seen as missing after it was seen present.
 	out, err := s.remote.Run(ctx, vm, fmt.Sprintf(
-		`cd %s 2>/dev/null || { echo gone; exit 0; }; if [ -f rc ]; then echo "done $(cat rc)"; elif [ -f pid ] && kill -0 "$(cat pid)" 2>/dev/null; then echo running; elif [ ! -f pid ]; then echo running; elif [ -f rc ]; then echo "done $(cat rc)"; else echo gone; fi`, d))
+		`cd %s 2>/dev/null || { echo gone; exit 0; }; if [ -f rc ]; then echo "done $(cat rc)"; elif [ ! -f pid ]; then if [ $(( $(date +%%s) - $(stat -c %%Y .) )) -gt 60 ]; then echo unstarted; else echo running; fi; elif kill -0 "$(cat pid)" 2>/dev/null; then echo running; elif [ -f rc ]; then echo "done $(cat rc)"; else echo gone; fi`, d))
 	if err != nil {
 		return Status{}, err
 	}
@@ -140,6 +142,8 @@ func parseStatus(out string) (Status, error) {
 		return Status{State: Running}, nil
 	case len(fields) == 1 && fields[0] == "gone":
 		return Status{State: Gone}, nil
+	case len(fields) == 1 && fields[0] == "unstarted":
+		return Status{State: Unstarted}, nil
 	case len(fields) == 2 && fields[0] == "done":
 		rc, err := strconv.Atoi(fields[1])
 		if err != nil {

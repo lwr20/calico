@@ -162,6 +162,8 @@ func (r *Runner) execute(ctx context.Context, ar *attemptRun) (Outcome, string, 
 				}
 			}
 			switch st.State {
+			case Unstarted:
+				return OutcomeVMLost, "the job never started", true
 			case Done:
 				return r.collect(ctx, ar, st.RC)
 			case Gone:
@@ -267,7 +269,9 @@ func (r *Runner) checkLoss(ctx context.Context, ar *attemptRun, wedgeOK bool) (O
 	}
 	log, _ := os.ReadFile(ar.logPath)
 	verdict := logVerdict(log, ar.run.Job.LogSummaries)
-	if verdict != "" {
+	// A lost VM's tests may have been interrupted, and an interrupted run
+	// prints a failing summary; only a pass is trusted then.
+	if verdict == OutcomePass || (verdict != "" && !lost) {
 		return r.verdictFromLog(ctx, ar, verdict, lost, why)
 	}
 	if lost {
@@ -293,7 +297,9 @@ func (r *Runner) verdictFromLog(ctx context.Context, ar *attemptRun, verdict Out
 		r.logf("%s WARNING: %v", ar.prefix, err)
 	}
 	_ = appendFile(ar.logPath, []byte("RUNNER: "+msg+"\n"))
-	if verdict == OutcomePass && ar.run.Job.MemoLogVerdict {
+	// A lost VM's pass is used but not memoised: it can't be told from an
+	// interrupted run's apart from the summary count.
+	if verdict == OutcomePass && ar.run.Job.MemoLogVerdict && !lost {
 		r.remember(ctx, ar, true)
 	}
 	return verdict, "verdict from log: " + why, true

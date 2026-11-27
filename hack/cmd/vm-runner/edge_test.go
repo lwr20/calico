@@ -242,3 +242,39 @@ func TestJobIDsSharingALogNameAreRefused(t *testing.T) {
 		t.Error("ids 7 and 007 accepted")
 	}
 }
+
+func TestClaimedAttemptThatNeverForkedIsUnstarted(t *testing.T) {
+	home := t.TempDir()
+	s := sshResults{remote: localRemote{home: home}}
+	run := JobRun{Job: Job{ID: "4", Command: []string{"true"}}, Attempt: 1}
+	dir := filepath.Join(home, attemptDir(run))
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	st, err := s.Status(context.Background(), VM{}, run)
+	if err != nil || st.State != Running {
+		t.Fatalf("fresh claim: %+v %v, want running", st, err)
+	}
+	old := time.Now().Add(-2 * time.Minute)
+	_ = os.Chtimes(dir, old, old)
+	if st, err := s.Status(context.Background(), VM{}, run); err != nil || st.State != Unstarted {
+		t.Errorf("stale claim: %+v %v, want unstarted", st, err)
+	}
+}
+
+func TestMaxRunCoversTheDeadline(t *testing.T) {
+	key := filepath.Join(t.TempDir(), "id.pub")
+	_ = os.WriteFile(key, []byte("ssh-rsa AAAA test\n"), 0o644)
+	startup := filepath.Join(t.TempDir(), "startup.sh")
+	_ = os.WriteFile(startup, []byte("#!/bin/bash\n"), 0o644)
+	f := runFlags{startupScript: startup, prefix: "fv", vms: 1, arch: "amd64", imageFamily: "i", setup: "s",
+		regions: "us-central1", deadline: time.Now().Add(6 * time.Hour).UTC().Format(time.RFC3339),
+		odTypes: "n2-standard-4", spotTypes: "n2-standard-4", sshKey: key, model: Spot, maxRun: 4 * time.Hour}
+	_, spec, err := buildConfig(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spec.MaxRunDuration < 6*time.Hour {
+		t.Errorf("max run %v ends before the deadline", spec.MaxRunDuration)
+	}
+}

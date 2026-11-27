@@ -27,6 +27,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -217,16 +218,36 @@ type cacheCLI interface {
 
 // skipCached restores each job the memo holds a pass for and leaves it out.
 func skipCached(jobs []Job, dir string, cache cacheCLI) (remaining []Job, cached []string) {
-	for _, j := range jobs {
-		if j.MemoKey != "" && cache.HasKey(j.MemoKey) {
+	hit := make([]bool, len(jobs))
+	sem := make(chan struct{}, 16)
+	var wg sync.WaitGroup
+	for i, j := range jobs {
+		if j.MemoKey == "" {
+			continue
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			if !cache.HasKey(j.MemoKey) {
+				return
+			}
 			if err := cache.Restore(j.MemoKey, dir); err == nil && hasReports(filepath.Join(dir, j.ID, "report")) {
-				cached = append(cached, j.ID)
-				continue
+				hit[i] = true
+				return
 			}
 			_ = os.RemoveAll(filepath.Join(dir, j.ID))
 			fmt.Fprintf(os.Stderr, "Batch memo: could not restore %s; running job %s.\n", j.MemoKey, j.ID)
+		}()
+	}
+	wg.Wait()
+	for i, j := range jobs {
+		if hit[i] {
+			cached = append(cached, j.ID)
+		} else {
+			remaining = append(remaining, j)
 		}
-		remaining = append(remaining, j)
 	}
 	return remaining, cached
 }
@@ -313,7 +334,8 @@ func runCmd(args []string) (int, error) {
 		defer cancel()
 	}
 
-	cloud, err := newGCECloud(ctx, *project, spec)
+	// Not ctx: token refresh binds to it, and deletes run after it ends.
+	cloud, err := newGCECloud(context.Background(), *project, spec)
 	if err != nil {
 		return 0, fmt.Errorf("GCE client: %w", err)
 	}
@@ -360,6 +382,9 @@ func buildConfig(f runFlags) (Config, gceSpec, error) {
 		return Config{}, zero, errors.New("--image-family is required")
 	case f.setup == "":
 		return Config{}, zero, errors.New("--setup is required")
+	case f.startupScript == "":
+		// The setup script waits for the startup script to finish.
+		return Config{}, zero, errors.New("--startup-script is required")
 	case f.deadline == "":
 		// Without one, a lane with no capacity would wait for ever.
 		return Config{}, zero, errors.New("--deadline is required")
@@ -389,6 +414,10 @@ func buildConfig(f runFlags) (Config, gceSpec, error) {
 		return Config{}, zero, fmt.Errorf("--deadline: %w", err)
 	}
 	cfg.Deadline = t
+	// VMs are reused until the deadline; GCE must not delete one sooner.
+	if need := time.Until(t) + 30*time.Minute; f.maxRun < need {
+		f.maxRun = need
+	}
 	if cfg.TotalCap != 0 && cfg.TotalCap < cfg.VMs {
 		return Config{}, zero, fmt.Errorf("--total-cap %d is below --vms %d", cfg.TotalCap, cfg.VMs)
 	}

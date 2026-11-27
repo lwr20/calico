@@ -161,6 +161,9 @@ func preemptLines(run, lane string, jobs []JobRecord) []string {
 				continue
 			}
 			outcome := "lost"
+			if j.Outcome == OutcomeNotRun {
+				outcome = "not-run"
+			}
 			if i+1 < len(j.Attempts) {
 				// A later attempt ran: name how the job ended.
 				switch j.Outcome {

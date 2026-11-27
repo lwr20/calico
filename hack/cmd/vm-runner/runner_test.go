@@ -355,11 +355,26 @@ func TestLogPassWithoutMemoLogVerdictIsNotMemoised(t *testing.T) {
 func TestPreemptedAfterFinishingTakesVerdictFromLog(t *testing.T) {
 	h := newHarness(t, 1)
 	h.results.plan = func(vm VM, run JobRun) fakeJob {
-		return fakeJob{preempt: true, log: "FAIL! -- 2 Passed | 1 Failed\n"}
+		return fakeJob{preempt: true, log: "SUCCESS! -- 3 Passed | 0 Failed\n"}
 	}
 	recs := byID(h.run(fvJobs(1)))
-	if r := recs["1"]; r.Outcome != OutcomeFail || len(r.Attempts) != 1 {
-		t.Errorf("job 1: %s after %d attempts, want fail from the log", r.Outcome, len(r.Attempts))
+	if r := recs["1"]; r.Outcome != OutcomePass || len(r.Attempts) != 1 {
+		t.Errorf("job 1: %s after %d attempts, want pass from the log", r.Outcome, len(r.Attempts))
+	}
+}
+
+func TestPreemptedFailingLogIsRequeued(t *testing.T) {
+	h := newHarness(t, 1)
+	h.results.plan = func(vm VM, run JobRun) fakeJob {
+		if run.Attempt == 1 {
+			// Preemption interrupts the tests, which then report failures.
+			return fakeJob{preempt: true, log: "FAIL! -- 2 Passed | 1 Failed\n"}
+		}
+		return passJob()
+	}
+	recs := byID(h.run(fvJobs(1)))
+	if r := recs["1"]; r.Outcome != OutcomePass || len(r.Attempts) != 2 {
+		t.Errorf("job 1: %s after %d attempts, want a requeue then pass", r.Outcome, len(r.Attempts))
 	}
 }
 

@@ -320,6 +320,13 @@ func (g *gceCloud) Delete(ctx context.Context, vms ...VM) error {
 				return err
 			})
 			if err != nil {
+				// GCE refuses to delete a VM it is already deleting.
+				if inst, gerr := g.svc.Instances.Get(g.project, vm.Zone, vm.Name).Context(ctx).Do(); isNotFound(gerr) ||
+					(gerr == nil && (inst.Status == "STOPPING" || inst.Status == "TERMINATED")) {
+					err = nil
+				}
+			}
+			if err != nil {
 				mu.Lock()
 				errs = append(errs, fmt.Errorf("%s: %w", vm.Name, err))
 				mu.Unlock()

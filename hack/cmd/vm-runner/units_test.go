@@ -230,7 +230,7 @@ func TestSSHResultsProtocol(t *testing.T) {
 	}
 	st := waitDone(t, s, vm, run)
 	if st.RC != 3 {
-		t.Errorf("rc %d, want 3", st.RC)
+		t.Errorf("status %+v, want rc 3", st)
 	}
 	log, _ := s.Log(ctx, vm, run, 0)
 	if string(log) != "it's a b\n" {
@@ -377,7 +377,9 @@ func TestSkipCached(t *testing.T) {
 func TestBuildConfig(t *testing.T) {
 	key := filepath.Join(t.TempDir(), "id.pub")
 	_ = os.WriteFile(key, []byte("ssh-rsa AAAA test\n"), 0o644)
-	ok := runFlags{prefix: "fv", vms: 4, arch: "amd64", imageFamily: "ubuntu-2404-lts-amd64", setup: "s",
+	startup := filepath.Join(t.TempDir(), "startup.sh")
+	_ = os.WriteFile(startup, []byte("#!/bin/bash\n"), 0o644)
+	ok := runFlags{startupScript: startup, prefix: "fv", vms: 4, arch: "amd64", imageFamily: "ubuntu-2404-lts-amd64", setup: "s",
 		regions: "us-central1 us-east1", deadline: "2026-11-27T12:00:00Z", odTypes: "n2-standard-4",
 		spotTypes: "c4d-standard-4", sshKey: key, model: Spot, labels: "a=b,c=d", profile: "Ubuntu 24.04"}
 	cfg, spec, err := buildConfig(ok)
@@ -393,6 +395,7 @@ func TestBuildConfig(t *testing.T) {
 		"bad model":         func(f *runFlags) { f.model = "PREEMPTIBLE" },
 		"cap below pool":    func(f *runFlags) { f.totalCap = 2 },
 		"no regions":        func(f *runFlags) { f.regions = " " },
+		"no startup script": func(f *runFlags) { f.startupScript = "" },
 	} {
 		f := ok
 		mod(&f)
