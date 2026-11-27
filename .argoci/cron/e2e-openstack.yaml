@@ -19,8 +19,9 @@
 # is a strict subset of full-fv, so adds nothing on a weekly cadence.
 version: condensed
 generateName: e2e-openstack-
-# Sundays 17:00 UTC (the handler emits no CronWorkflow timezone, so cron
-# fields are UTC).
+# Parked (31 Feb never fires) until the release-3.34 PPA and branch images
+# exist; un-parking needs the INSTALL_SOURCE / CALICOCTL_IMAGE /
+# CALICO_NODE_IMAGE overrides above.
 schedule: 0 0 31 2 *
 globalPrologue: |
   cd "${CI_HOME}/${CI_GIT_DIR}"
