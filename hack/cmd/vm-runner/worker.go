@@ -55,11 +55,7 @@ func (r *Runner) worker(ctx context.Context, vm VM) {
 			default:
 			}
 			if a != nil {
-				now := r.now()
-				r.events <- evJobDone{vm: vm.Name, job: a.job.ID, attempt: Attempt{
-					VM: vm.Name, Region: vm.Region, Zone: vm.Zone, Model: vm.Model, MachineType: vm.Type,
-					Start: now, End: now, Outcome: OutcomeNotRun, Reason: "runner stopped",
-				}}
+				r.events <- evJobDone{vm: vm.Name, job: a.job.ID, unrun: true}
 			}
 			return
 		}
@@ -210,11 +206,15 @@ func (r *Runner) collect(ctx context.Context, ar *attemptRun, rc int) (Outcome, 
 		err = r.fetch(ctx, ar)
 	}
 	if err != nil {
-		_ = os.RemoveAll(r.layout.jobDir(ar.run.Job.ID))
-		if o, why, decided := r.checkLoss(ctx, ar, false); decided {
-			return o, why, true
+		// The rc is the result even when the VM is gone now; rerunning would
+		// hide a real failure.
+		id := ar.run.Job.ID
+		_ = os.RemoveAll(r.layout.jobDir(id))
+		msg := fmt.Sprintf("Job %s exited %d; its reports could not be fetched: %v", id, rc, err)
+		if werr := writeSyntheticJUnit(r.layout.reportDir(id), id, "unfetched", msg, rc != 0, r.now().Sub(ar.att.Start)); werr != nil {
+			r.logf("%s WARNING: %v", ar.prefix, werr)
 		}
-		return OutcomeFail, "outputs not fetched: " + err.Error(), true
+		return outcome, strings.TrimPrefix(reason+"; outputs not fetched", "; "), true
 	}
 	if outcome == OutcomePass {
 		r.remember(ctx, ar, false)
@@ -222,8 +222,10 @@ func (r *Runner) collect(ctx context.Context, ar *attemptRun, rc int) (Outcome, 
 	return outcome, reason, false
 }
 
+// fetch outlives the runner's cancellation: a finished job's reports are
+// worth the wait.
 func (r *Runner) fetch(ctx context.Context, ar *attemptRun) error {
-	fctx, cancel := context.WithTimeout(ctx, r.cfg.FetchTimeout)
+	fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), r.cfg.FetchTimeout)
 	defer cancel()
 	return r.results.Fetch(fctx, ar.vm, ar.run, r.layout.jobDir(ar.run.Job.ID))
 }

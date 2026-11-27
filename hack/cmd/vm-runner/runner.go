@@ -112,6 +112,8 @@ type Runner struct {
 	events  chan event
 	workers sync.WaitGroup
 	deletes sync.WaitGroup
+	// deleting holds the VMs this run asked GCE to delete.
+	deleting sync.Map
 
 	// Scheduler state.
 	start            time.Time
@@ -119,6 +121,7 @@ type Runner struct {
 	queue            []*jobState
 	vms              map[string]*vmState
 	pendingTotal     int
+	pendingForJobs   int
 	pendingOnDemand  int
 	creating         int
 	target           int
@@ -204,6 +207,8 @@ type evJobDone struct {
 	vm      string
 	job     string
 	attempt Attempt
+	// unrun is an assignment the worker gave back unstarted.
+	unrun bool
 }
 
 type evWorkerExit struct {
@@ -263,6 +268,10 @@ func (r *Runner) Run(ctx context.Context, jobs []Job) ([]JobRecord, error) {
 		r.logf("Deleting %d VMs left by an earlier attempt of this step.", len(stale))
 		if err := r.cloud.Delete(ctx, stale...); err != nil {
 			r.logf("WARNING: could not delete them all: %v", err)
+		} else {
+			for _, vm := range stale {
+				r.deleting.Store(vm.ID, true)
+			}
 		}
 	}
 
@@ -343,6 +352,9 @@ func (r *Runner) handle(ctx context.Context, ev event) {
 func (r *Runner) onCreated(ctx context.Context, ev evCreated) {
 	r.creating--
 	r.pendingTotal -= ev.req.count
+	if ev.req.forJob != nil {
+		r.pendingForJobs -= ev.req.count
+	}
 	r.pendingOnDemand -= ev.req.odAllowance
 	if ev.rejected != nil && r.createRejected == nil && ev.req.forJob == nil {
 		r.logf("GCE rejected every create, not for capacity; creating no more VMs: %v", ev.rejected)
@@ -383,6 +395,10 @@ func (r *Runner) onCreated(ctx context.Context, ev evCreated) {
 func (r *Runner) onSetup(ev evSetup) {
 	if ev.ok {
 		r.setupFailStreak = 0
+		// Failures are often passing (preempted while booting, a short outage).
+		if r.target < r.cfg.VMs {
+			r.target++
+		}
 		return
 	}
 	// The general target's shrink below doesn't bound a job's own creates.
@@ -406,6 +422,10 @@ func (r *Runner) onJobDone(ev evJobDone) {
 	}
 	js := r.jobByID(ev.job)
 	js.running = false
+	if ev.unrun {
+		r.finish(js, OutcomeNotRun, "runner stopped")
+		return
+	}
 	js.attempts = append(js.attempts, ev.attempt)
 	a := ev.attempt
 	if !a.Outcome.isLoss() {
@@ -507,8 +527,7 @@ func (r *Runner) sortedVMs() []*vmState {
 	return vs
 }
 
-// dispatch hands out jobs, ends those that can no longer start, and sizes the
-// pool.  It runs after every event.
+// dispatch runs after every event, so a decision never waits for a tick.
 func (r *Runner) dispatch(ctx context.Context) {
 	now := r.now()
 
@@ -579,7 +598,8 @@ func (r *Runner) counts() (live, liveOnDemand, idleOrBooting int) {
 		if v.vm.Model == Standard {
 			liveOnDemand++
 		}
-		if v.phase == phaseIdle || v.phase == phaseSetup {
+		reserved := v.forJob != nil && !v.forJob.done && slices.Contains(r.queue, v.forJob)
+		if (v.phase == phaseIdle || v.phase == phaseSetup) && !reserved {
 			idleOrBooting++
 		}
 	}
@@ -655,7 +675,7 @@ func (r *Runner) provision(ctx context.Context) {
 			want++
 		}
 	}
-	want -= idleOrBooting + r.pendingTotal
+	want -= idleOrBooting + r.pendingTotal - r.pendingForJobs
 	room := min(r.target, r.cfg.TotalCap) - live - r.pendingTotal
 	n := min(want, room)
 	if n <= 0 {
@@ -668,6 +688,9 @@ func (r *Runner) provision(ctx context.Context) {
 func (r *Runner) startCreate(ctx context.Context, req createRequest) {
 	r.creating++
 	r.pendingTotal += req.count
+	if req.forJob != nil {
+		r.pendingForJobs += req.count
+	}
 	r.pendingOnDemand += req.odAllowance
 	go func() {
 		vms, rejected := r.create(ctx, req)
@@ -740,7 +763,9 @@ func (r *Runner) deleteVM(vm VM) {
 		defer cancel()
 		if err := r.cloud.Delete(ctx, vm); err != nil {
 			r.logf("WARNING: could not delete VM %s: %v", vm.Name, err)
+			return
 		}
+		r.deleting.Store(vm.ID, true)
 	}()
 }
 
@@ -754,6 +779,11 @@ func (r *Runner) sweep() {
 		r.logf("WARNING: could not list VMs for the final sweep: %v", err)
 		return
 	}
+	// GCE is still deleting the VMs this run deleted; asking again only errors.
+	left = slices.DeleteFunc(left, func(vm VM) bool {
+		_, ok := r.deleting.Load(vm.ID)
+		return ok
+	})
 	if len(left) > 0 {
 		if err := r.cloud.Delete(ctx, left...); err != nil {
 			r.logf("WARNING: final sweep could not delete every VM: %v", err)

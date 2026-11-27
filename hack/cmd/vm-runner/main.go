@@ -84,7 +84,11 @@ func felixJobsCmd(args []string) error {
 			len(cached), len(cached)+len(jobs), orNone(cached), len(jobs))
 	}
 	if *cachedOut != "" {
-		if err := os.WriteFile(*cachedOut, []byte(strings.Join(cached, "\n")+"\n"), 0o644); err != nil {
+		var data []byte
+		for _, id := range cached {
+			data = append(data, id+"\n"...)
+		}
+		if err := os.WriteFile(*cachedOut, data, 0o644); err != nil {
 			return err
 		}
 	}
@@ -219,6 +223,7 @@ func skipCached(jobs []Job, dir string, cache cacheCLI) (remaining []Job, cached
 				cached = append(cached, j.ID)
 				continue
 			}
+			_ = os.RemoveAll(filepath.Join(dir, j.ID))
 			fmt.Fprintf(os.Stderr, "Batch memo: could not restore %s; running job %s.\n", j.MemoKey, j.ID)
 		}
 		remaining = append(remaining, j)

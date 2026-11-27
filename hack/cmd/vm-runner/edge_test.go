@@ -17,6 +17,7 @@ package main
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -178,6 +179,45 @@ func TestVMCreatedForAJobGoesToIt(t *testing.T) {
 		if r.ID != "1" && r.Outcome != OutcomePass {
 			t.Errorf("job %s: %s", r.ID, r.Outcome)
 		}
+	}
+}
+
+func TestUnfetchedOutputsKeepTheExitCode(t *testing.T) {
+	h := newHarness(t, 1)
+	h.results.plan = func(vm VM, run JobRun) fakeJob {
+		j := passJob()
+		j.fetchFail = true
+		if run.Job.ID == "1" {
+			j.rc = 2
+		}
+		return j
+	}
+	recs := byID(h.run(fvJobs(2)))
+	if r := recs["1"]; r.Outcome != OutcomeFail || len(r.Attempts) != 1 {
+		t.Errorf("job 1: %s after %d attempts, want one fail from rc", r.Outcome, len(r.Attempts))
+	}
+	if r := recs["2"]; r.Outcome != OutcomePass || len(r.Attempts) != 1 {
+		t.Errorf("job 2: %s after %d attempts, want one pass from rc", r.Outcome, len(r.Attempts))
+	}
+	if !exists(filepath.Join(h.cfg.Artifacts, "2", "report", "vm-runner_unfetched_002.xml")) {
+		t.Error("no JUnit for the unfetched pass")
+	}
+}
+
+func TestPoolTargetRegrowsAfterSetupRecovers(t *testing.T) {
+	r := NewRunner(Config{VMs: 3, Out: io.Discard}, nil, nil, nil, nil)
+	r.target = 3
+	for i := 0; i < 4; i++ {
+		r.onSetup(evSetup{ok: false})
+	}
+	if r.target != 1 {
+		t.Fatalf("target %d after four failed setups, want 1", r.target)
+	}
+	for i := 0; i < 5; i++ {
+		r.onSetup(evSetup{ok: true})
+	}
+	if r.target != 3 {
+		t.Errorf("target %d after setups recovered, want 3", r.target)
 	}
 }
 

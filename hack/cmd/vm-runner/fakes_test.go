@@ -158,7 +158,7 @@ type fakeJob struct {
 	// hang never finishes; gone loses its process; wedge stops answering
 	// with the VM still up; preempt and vanish lose the VM.
 	hang, gone, wedge, preempt, vanish bool
-	startErr                           bool
+	startErr, fetchFail                bool
 }
 
 type fakeRun struct {
@@ -256,7 +256,7 @@ func (f *fakeResults) Fetch(_ context.Context, vm VM, run JobRun, dir string) er
 	f.mu.Lock()
 	fr := f.runs[runKey(run)]
 	f.mu.Unlock()
-	if !f.reachable(vm, fr) {
+	if !f.reachable(vm, fr) || fr.plan.fetchFail {
 		return errUnreachable
 	}
 	if err := os.MkdirAll(filepath.Join(dir, "report"), 0o755); err != nil {
